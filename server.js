@@ -426,8 +426,8 @@ function updateGamePhysics() {
         const player = gameState.players[id];
         if (!player.isAlive) continue;
 
-        // Ne pas se blesser avec sa propre balle immédiatement après le tir
-        if (player.id === bullet.playerId && (now - bullet.createdAt < 250)) continue;
+        // Immunité totale contre ses propres balles (même après rebond)
+        if (player.id === bullet.playerId) continue;
 
         const dist = Math.hypot(player.x - bullet.x, player.y - bullet.y);
         if (dist < player.radius + bullet.radius) {
