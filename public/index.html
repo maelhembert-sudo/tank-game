@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Tank Clash 2D - Multijoueur LAN</title>
+  <link rel="stylesheet" href="style.css">
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+  <!-- Écran d'accueil / Salon de connexion -->
+  <div id="lobby-screen" class="overlay-screen">
+    <div class="lobby-card">
+      <div class="logo-container">
+        <span class="tank-icon">⚔️</span>
+        <h1>TANK CLASH 2D</h1>
+        <p class="subtitle">Bataille Multijoueur Réseau Local (LAN)</p>
+      </div>
+
+      <div class="form-group">
+        <label for="player-name">Pseudo du Tankiste :</label>
+        <input type="text" id="player-name" placeholder="Ex: Panzerwaffe" maxlength="15" autocomplete="off" />
+      </div>
+
+      <div class="form-group">
+        <label>Couleur du blindage :</label>
+        <div class="color-palette" id="color-palette">
+          <button type="button" class="color-btn selected" data-color="#e52d27" style="background: #e52d27;"></button>
+          <button type="button" class="color-btn" data-color="#00b4d8" style="background: #00b4d8;"></button>
+          <button type="button" class="color-btn" data-color="#2ec4b6" style="background: #2ec4b6;"></button>
+          <button type="button" class="color-btn" data-color="#ff9f1c" style="background: #ff9f1c;"></button>
+          <button type="button" class="color-btn" data-color="#9d4edd" style="background: #9d4edd;"></button>
+          <button type="button" class="color-btn" data-color="#ff006e" style="background: #ff006e;"></button>
+          <button type="button" class="color-btn" data-color="#80ed99" style="background: #80ed99;"></button>
+        </div>
+      </div>
+
+      <button id="btn-start" class="btn-play">ENTRER DANS L'ARÈNE 🚀</button>
+
+      <div class="instructions-panel">
+        <div class="instruction-col">
+          <strong>💻 Sur PC :</strong>
+          <span><b>Z, Q, S, D</b> ou <b>Flèches</b> : Piloter & Viser (tourelle fixe)</span>
+          <span><b>Clic Gauche</b> ou <b>Espace</b> : Tirer</span>
+        </div>
+        <div class="instruction-col">
+          <strong>📱 Sur Smartphone / Tablette :</strong>
+          <span><b>Joystick</b> : Se déplacer & Viser</span>
+          <span><b>Bouton FEU</b> : Tirer</span>
+        </div>
+      </div>
+
+      <div class="lan-info-banner">
+        <span class="pulse-dot"></span>
+        <span id="lan-url-text">Pour inviter d'autres appareils : partagez l'adresse IP affichée dans la console.</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Interface HUD en jeu -->
+  <div id="game-hud" class="hud-container hidden">
+    <!-- Barre de vie & Statuts -->
+    <div class="hud-top-left">
+      <div class="player-tag">
+        <span id="hud-name">Joueur</span>
+      </div>
+      <div class="health-bar-container">
+        <div id="hud-health-fill" class="health-fill" style="width: 100%;"></div>
+        <span id="hud-health-text">100 / 100</span>
+      </div>
+      <div id="hud-buffs" class="buffs-container"></div>
+    </div>
+
+    <!-- Tableau des scores -->
+    <div class="hud-top-right">
+      <div class="leaderboard-box">
+        <div class="leaderboard-title">🏆 CLASSEMENT</div>
+        <div id="leaderboard-list"></div>
+      </div>
+    </div>
+
+    <!-- Feed d'événements / Kills -->
+    <div id="kill-feed" class="kill-feed-container"></div>
+
+    <!-- Bouton Audio -->
+    <button id="btn-toggle-sound" class="btn-sound" title="Activer / Couper le son">🔊</button>
+  </div>
+
+  <!-- Écran de réapparition (Mort) -->
+  <div id="death-overlay" class="death-overlay hidden">
+    <div class="death-message">
+      <h2>TANK DÉTRUIT ! 💥</h2>
+      <p>Réapparition dans <span id="respawn-counter">3</span>s...</p>
+    </div>
+  </div>
+
+  <!-- Contrôles Tactiles Mobiles -->
+  <div id="touch-controls" class="touch-container hidden">
+    <div id="touch-move-zone" class="touch-zone left-zone">
+      <div id="touch-move-base" class="joystick-base">
+        <div id="touch-move-stick" class="joystick-stick"></div>
+      </div>
+    </div>
+    <div id="touch-aim-zone" class="touch-zone right-zone">
+      <div id="touch-aim-base" class="joystick-base">
+        <div id="touch-aim-stick" class="joystick-stick"></div>
+      </div>
+      <button id="touch-fire-btn" class="touch-fire-button">FEU 🔥</button>
+    </div>
+  </div>
+
+  <!-- Le Canvas du jeu -->
+  <canvas id="gameCanvas"></canvas>
+
+  <script src="js/game.js"></script>
+</body>
+</html>
+
