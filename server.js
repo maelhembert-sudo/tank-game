@@ -173,6 +173,8 @@ io.on('connection', (socket) => {
       deaths: 0,
       score: 0,
       shield: Date.now() + 2500, // Bouclier d'invulnérabilité au spawn (2.5s)
+      shieldHits: 0, // Charges du bouclier bonus (détruit à l'impact)
+      shieldExpiresAt: 0,
       speedMultiplier: 1.0,
       rapidFireUntil: 0,
       tripleShotUntil: 0,
@@ -281,8 +283,7 @@ setInterval(() => {
       health: p.health,
       maxHealth: p.maxHealth,
       isAlive: p.isAlive,
-      shield: p.shield > now,
-      shieldTime: p.shield,
+      hasShield: (now < (p.shield || 0)) || ((p.shieldHits || 0) > 0 && now < (p.shieldExpiresAt || 0)),
       kills: p.kills,
       deaths: p.deaths,
       score: p.score,
@@ -314,7 +315,7 @@ setInterval(() => {
 
   // Nettoyage des explosions après diffusion
   gameState.explosions = [];
-}, 1000 / 60);
+}, 1000 / 35);
 
 function updateGamePhysics() {
   const now = Date.now();
@@ -434,8 +435,10 @@ function updateGamePhysics() {
           destroyed = true;
           gameState.explosions.push({ x: bullet.x, y: bullet.y, radius: 25, type: 'bullet' });
 
-          // Vérifier si le tank a un bouclier actif
-          if (now > player.shield) {
+          // Vérifier si le tank a un bouclier actif (spawn ou bonus)
+          const hasActiveShield = (now < (player.shield || 0)) || ((player.shieldHits || 0) > 0 && now < (player.shieldExpiresAt || 0));
+
+          if (!hasActiveShield) {
             player.health -= 34; // 3 coups pour éliminer un tank
             io.emit('sound_event', { type: 'hit', x: player.x, y: player.y });
 
@@ -443,7 +446,19 @@ function updateGamePhysics() {
               killPlayer(player, bullet.playerId);
             }
           } else {
-            io.emit('sound_event', { type: 'shield_deflect', x: player.x, y: player.y });
+            // Le bouclier absorbe l'impact !
+            if (player.shieldHits > 0) {
+              player.shieldHits--;
+              if (player.shieldHits <= 0) {
+                player.shieldExpiresAt = 0;
+                io.emit('sound_event', { type: 'shield_broken', x: player.x, y: player.y });
+                gameState.explosions.push({ x: player.x, y: player.y, radius: 45, type: 'shield_break' });
+              } else {
+                io.emit('sound_event', { type: 'shield_deflect', x: player.x, y: player.y });
+              }
+            } else {
+              io.emit('sound_event', { type: 'shield_deflect', x: player.x, y: player.y });
+            }
           }
           break;
         }
@@ -464,7 +479,8 @@ function applyPowerup(player, pup) {
   } else if (pup.type === 'rapid') {
     player.rapidFireUntil = now + 8000;
   } else if (pup.type === 'shield') {
-    player.shield = now + 7000;
+    player.shieldHits = 1; // Protège le joueur jusqu'à subir un impact destructeur
+    player.shieldExpiresAt = now + 40000; // Ou 40 secondes max
   } else if (pup.type === 'triple') {
     player.tripleShotUntil = now + 8000;
   }
@@ -503,6 +519,8 @@ function respawnPlayer(player) {
   player.health = player.maxHealth;
   player.isAlive = true;
   player.shield = Date.now() + 2500;
+  player.shieldHits = 0;
+  player.shieldExpiresAt = 0;
   player.speedMultiplier = 1.0;
   player.rapidFireUntil = 0;
   player.tripleShotUntil = 0;

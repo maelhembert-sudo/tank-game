@@ -216,8 +216,8 @@ function updateHUD() {
   // Buffs
   const now = Date.now();
   let buffHtml = '';
-  if (now < me.shield) {
-    buffHtml += `<span class="buff-pill" style="background:#00d2ff;">🛡️ Bouclier (${Math.ceil((me.shield - now)/1000)}s)</span>`;
+  if (me.hasShield || (me.shieldTime && now < me.shieldTime)) {
+    buffHtml += `<span class="buff-pill" style="background:#00d2ff;">🛡️ Bouclier Actif</span>`;
   }
   if (now < me.rapidFireUntil) {
     buffHtml += `<span class="buff-pill" style="background:#ffb300;">⚡ Tir Rapide (${Math.ceil((me.rapidFireUntil - now)/1000)}s)</span>`;
@@ -328,6 +328,19 @@ function playSound(type) {
     filter.connect(gain);
     gain.connect(audioCtx.destination);
     noise.start(now);
+  } else if (type === 'shield_broken') {
+    // Son d'explosion / éclatement de bouclier
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'triangle';
+    osc.frequency.setValueAtTime(650, now);
+    osc.frequency.exponentialRampToValueAtTime(140, now + 0.26);
+    gain.gain.setValueAtTime(0.35, now);
+    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.26);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start(now);
+    osc.stop(now + 0.27);
   } else if (type === 'powerup') {
     // Carillon de powerup montant
     const notes = [440, 554, 659, 880];
@@ -348,16 +361,20 @@ function playSound(type) {
 
 // Gestion des Particules
 function createExplosionParticles(x, y, radius, type) {
-  const count = type === 'tank' ? 45 : 16;
+  const count = type === 'tank' ? 45 : (type === 'shield_break' ? 28 : 16);
+  const colors = type === 'shield_break'
+    ? ['#00f0ff', '#ffffff', '#00b4d8', '#caf0f8']
+    : ['#ff4b2b', '#ff416c', '#ffb300', '#ffffff'];
+
   for (let i = 0; i < count; i++) {
     const angle = Math.random() * Math.PI * 2;
-    const speed = (Math.random() * 4 + 1.5) * (type === 'tank' ? 1.8 : 1.0);
+    const speed = (Math.random() * 4 + 1.5) * (type === 'tank' ? 1.8 : 1.3);
     particles.push({
       x, y,
       vx: Math.cos(angle) * speed,
       vy: Math.sin(angle) * speed,
       size: Math.random() * 5 + 3,
-      color: ['#ff4b2b', '#ff416c', '#ffb300', '#ffffff'][Math.floor(Math.random() * 4)],
+      color: colors[Math.floor(Math.random() * colors.length)],
       life: 1.0,
       decay: Math.random() * 0.03 + 0.02
     });
@@ -698,16 +715,35 @@ function drawTank(tank) {
 
   ctx.restore();
 
-  // 4. Bouclier d'invulnérabilité (si actif)
+  // 4. Bouclier protecteur physique (visible jusqu'à sa destruction !)
   const now = Date.now();
-  if (now < tank.shield) {
-    ctx.strokeStyle = `rgba(0, 210, 255, ${0.4 + Math.sin(now / 100) * 0.3})`;
+  if (tank.hasShield || (tank.shieldTime && now < tank.shieldTime)) {
+    const pulse = Math.sin(now / 110) * 2;
+    const r = (tank.radius || 24) + 12 + pulse;
+
+    ctx.save();
+    // Halo lumineux externe cyan
+    ctx.strokeStyle = '#00f0ff';
     ctx.lineWidth = 3;
+    ctx.shadowColor = '#00f0ff';
+    ctx.shadowBlur = 14;
     ctx.beginPath();
-    ctx.arc(0, 0, tank.radius + 10, 0, Math.PI * 2);
+    ctx.arc(0, 0, r, 0, Math.PI * 2);
     ctx.stroke();
-    ctx.fillStyle = 'rgba(0, 210, 255, 0.1)';
+
+    // Remplissage d'énergie translucide
+    ctx.fillStyle = 'rgba(0, 210, 255, 0.18)';
     ctx.fill();
+
+    // Anneau d'énergie intérieur en rotation
+    ctx.rotate(now / 350);
+    ctx.setLineDash([12, 8]);
+    ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.arc(0, 0, r - 3, 0, Math.PI * 2);
+    ctx.stroke();
+    ctx.restore();
   }
 
   // 5. Barre de vie et pseudo au-dessus du tank
