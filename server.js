@@ -25,6 +25,9 @@ app.get('/tank', (req, res) => {
 app.get('/pong', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'pong.html'));
 });
+app.get('/blob', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'blob.html'));
+});
 
 // Dimensions de l'arène de jeu
 const MAP_WIDTH = 1800;
@@ -596,12 +599,384 @@ function getActivePongPlayersCount() {
   return count;
 }
 
+// ==========================================
+// CONFIGURATION & SIMULATION BLOB CLASH (AGAR.IO)
+// ==========================================
+const BLOB_MAP_WIDTH = 3000;
+const BLOB_MAP_HEIGHT = 3000;
+const MAX_FOOD_PELLETS = 360;
+const VIRUS_COUNT = 14;
+const FOOD_COLORS = [
+  '#f43f5e', '#ec4899', '#d946ef', '#a855f7', '#8b5cf6',
+  '#6366f1', '#3b82f6', '#0ea5e9', '#06b6d4', '#14b8a6',
+  '#10b981', '#22c55e', '#84cc16', '#eab308', '#f97316'
+];
+
+const BOT_BLOB_NAMES = [
+  '🤖 Spore', '🤖 Amoeba', '🤖 Glouton', '🤖 Vortex',
+  '🤖 Titania', '🤖 Microbe', '🤖 Nebula', '🤖 Titan'
+];
+
+const blobState = {
+  players: {}, // id -> player
+  food: new Map(), // id -> { id, x, y, color, radius }
+  ejected: [], // [{ id, x, y, vx, vy, radius, mass, color }]
+  viruses: [], // [{ id, x, y, radius }]
+  nextId: 1
+};
+
+const blobFoodDelta = {
+  eaten: [],
+  added: []
+};
+
+// Générer les pastilles de nourriture initiales
+function spawnFoodPellet() {
+  const fid = blobState.nextId++;
+  const food = {
+    id: fid,
+    x: Math.round(30 + Math.random() * (BLOB_MAP_WIDTH - 60)),
+    y: Math.round(30 + Math.random() * (BLOB_MAP_HEIGHT - 60)),
+    color: FOOD_COLORS[Math.floor(Math.random() * FOOD_COLORS.length)],
+    radius: 5
+  };
+  blobState.food.set(fid, food);
+  return food;
+}
+
+for (let i = 0; i < MAX_FOOD_PELLETS; i++) {
+  spawnFoodPellet();
+}
+
+// Générer les virus (obstacles piquants)
+for (let i = 0; i < VIRUS_COUNT; i++) {
+  blobState.viruses.push({
+    id: i + 1,
+    x: Math.round(150 + Math.random() * (BLOB_MAP_WIDTH - 300)),
+    y: Math.round(150 + Math.random() * (BLOB_MAP_HEIGHT - 300)),
+    radius: 38
+  });
+}
+
+// Gestion des bots IA pour Blob Clash
+function manageBlobBots() {
+  BOT_BLOB_NAMES.forEach((botName, idx) => {
+    const botId = `bot_blob_${idx}`;
+    if (!blobState.players[botId] || !blobState.players[botId].isAlive) {
+      const spawnX = 200 + Math.random() * (BLOB_MAP_WIDTH - 400);
+      const spawnY = 200 + Math.random() * (BLOB_MAP_HEIGHT - 400);
+      const botColor = FOOD_COLORS[idx % FOOD_COLORS.length];
+
+      blobState.players[botId] = {
+        id: botId,
+        name: botName,
+        color: botColor,
+        isBot: true,
+        isAlive: true,
+        killedBy: null,
+        target: { x: spawnX, y: spawnY },
+        cells: [{
+          id: 1,
+          x: spawnX,
+          y: spawnY,
+          radius: 22,
+          mass: 20,
+          vx: 0,
+          vy: 0,
+          canMergeAt: 0
+        }],
+        botTimer: 0
+      };
+    }
+  });
+}
+
+// Nettoyer les joueurs humains déconnectés de Blob Clash
+function cleanBlobPlayers() {
+  let changed = false;
+  for (const id in blobState.players) {
+    const p = blobState.players[id];
+    if (p.isBot) continue;
+    if (!isSocketActive(id)) {
+      delete blobState.players[id];
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function getActiveBlobPlayersCount() {
+  cleanBlobPlayers();
+  return Object.values(blobState.players).filter(p => !p.isBot).length;
+}
+
+function getSafeBlobSpawn() {
+  return {
+    x: 200 + Math.random() * (BLOB_MAP_WIDTH - 400),
+    y: 200 + Math.random() * (BLOB_MAP_HEIGHT - 400)
+  };
+}
+
+// IA dynamique pour les bots
+function updateBlobBotAI(bot) {
+  if (!bot.isAlive || !bot.cells || bot.cells.length === 0) return;
+  const mainCell = bot.cells[0];
+
+  // 1. Détecter un prédateur proche (cellule plus grosse de 15% dans un rayon de 260px)
+  let threat = null;
+  let threatDist = 260;
+  for (const pid in blobState.players) {
+    const other = blobState.players[pid];
+    if (!other.isAlive || other.id === bot.id || !other.cells) continue;
+    for (const oc of other.cells) {
+      if (oc.mass > mainCell.mass * 1.15) {
+        const d = Math.hypot(oc.x - mainCell.x, oc.y - mainCell.y);
+        if (d < threatDist) {
+          threatDist = d;
+          threat = oc;
+        }
+      }
+    }
+  }
+
+  if (threat) {
+    const dx = mainCell.x - threat.x;
+    const dy = mainCell.y - threat.y;
+    bot.target.x = mainCell.x + dx * 2;
+    bot.target.y = mainCell.y + dy * 2;
+    return;
+  }
+
+  // 2. Détecter une proie chassable (cellule plus petite de 20% dans un rayon de 220px)
+  let prey = null;
+  let preyDist = 220;
+  for (const pid in blobState.players) {
+    const other = blobState.players[pid];
+    if (!other.isAlive || other.id === bot.id || !other.cells) continue;
+    for (const oc of other.cells) {
+      if (mainCell.mass > oc.mass * 1.2) {
+        const d = Math.hypot(oc.x - mainCell.x, oc.y - mainCell.y);
+        if (d < preyDist) {
+          preyDist = d;
+          prey = oc;
+        }
+      }
+    }
+  }
+
+  if (prey) {
+    bot.target.x = prey.x;
+    bot.target.y = prey.y;
+    return;
+  }
+
+  // 3. Chercher la nourriture la plus proche
+  if (++bot.botTimer > 15) {
+    bot.botTimer = 0;
+    let closestFood = null;
+    let minDist = 320;
+    for (const f of blobState.food.values()) {
+      const d = Math.hypot(f.x - mainCell.x, f.y - mainCell.y);
+      if (d < minDist) {
+        minDist = d;
+        closestFood = f;
+      }
+    }
+    if (closestFood) {
+      bot.target.x = closestFood.x;
+      bot.target.y = closestFood.y;
+    } else {
+      bot.target.x = Math.max(100, Math.min(BLOB_MAP_WIDTH - 100, mainCell.x + (Math.random() - 0.5) * 400));
+      bot.target.y = Math.max(100, Math.min(BLOB_MAP_HEIGHT - 100, mainCell.y + (Math.random() - 0.5) * 400));
+    }
+  }
+}
+
+// Simulation physique de Blob Clash (45 Hz)
+function updateBlobPhysics() {
+  const now = Date.now();
+  cleanBlobPlayers();
+  manageBlobBots();
+
+  // 1. Déplacement des cellules des joueurs et bots
+  for (const pid in blobState.players) {
+    const p = blobState.players[pid];
+    if (!p.isAlive || !p.cells || p.cells.length === 0) continue;
+
+    if (p.isBot) {
+      updateBlobBotAI(p);
+    }
+
+    p.cells.forEach(cell => {
+      cell.radius = Math.max(16, Math.sqrt(cell.mass * 26));
+      const speed = Math.max(1.8, 6.4 - Math.log(cell.mass + 1) * 0.68);
+
+      const dx = p.target.x - cell.x;
+      const dy = p.target.y - cell.y;
+      const dist = Math.hypot(dx, dy);
+
+      if (dist > 8) {
+        const moveStep = Math.min(speed, dist);
+        cell.x += (dx / dist) * moveStep;
+        cell.y += (dy / dist) * moveStep;
+      }
+
+      cell.x += cell.vx;
+      cell.y += cell.vy;
+      cell.vx *= 0.88;
+      cell.vy *= 0.88;
+
+      cell.x = Math.max(cell.radius, Math.min(BLOB_MAP_WIDTH - cell.radius, cell.x));
+      cell.y = Math.max(cell.radius, Math.min(BLOB_MAP_HEIGHT - cell.radius, cell.y));
+    });
+
+    // Gestion du Merge (recombinaison) ou répulsion
+    for (let i = 0; i < p.cells.length; i++) {
+      for (let j = i + 1; j < p.cells.length; j++) {
+        const c1 = p.cells[i];
+        const c2 = p.cells[j];
+        const d = Math.hypot(c2.x - c1.x, c2.y - c1.y);
+        const minDist = c1.radius + c2.radius;
+
+        if (d < minDist) {
+          if (now >= c1.canMergeAt && now >= c2.canMergeAt) {
+            c1.mass += c2.mass;
+            c1.radius = Math.max(16, Math.sqrt(c1.mass * 26));
+            p.cells.splice(j, 1);
+            j--;
+          } else {
+            const overlap = minDist - d;
+            const pushAngle = Math.atan2(c2.y - c1.y, c2.x - c1.x);
+            c1.x -= Math.cos(pushAngle) * (overlap * 0.5);
+            c1.y -= Math.sin(pushAngle) * (overlap * 0.5);
+            c2.x += Math.cos(pushAngle) * (overlap * 0.5);
+            c2.y += Math.sin(pushAngle) * (overlap * 0.5);
+          }
+        }
+      }
+    }
+  }
+
+  // 2. Déplacement des pastilles éjectées
+  for (let i = blobState.ejected.length - 1; i >= 0; i--) {
+    const ep = blobState.ejected[i];
+    ep.x += ep.vx;
+    ep.y += ep.vy;
+    ep.vx *= 0.90;
+    ep.vy *= 0.90;
+    ep.x = Math.max(ep.radius, Math.min(BLOB_MAP_WIDTH - ep.radius, ep.x));
+    ep.y = Math.max(ep.radius, Math.min(BLOB_MAP_HEIGHT - ep.radius, ep.y));
+  }
+
+  // 3. Collision : Cellules mangeant de la Nourriture (Food)
+  for (const pid in blobState.players) {
+    const p = blobState.players[pid];
+    if (!p.isAlive) continue;
+
+    p.cells.forEach(cell => {
+      for (const [fid, f] of blobState.food) {
+        if (Math.abs(cell.x - f.x) < cell.radius && Math.abs(cell.y - f.y) < cell.radius) {
+          const d = Math.hypot(cell.x - f.x, cell.y - f.y);
+          if (d < cell.radius) {
+            cell.mass += 1;
+            blobState.food.delete(fid);
+            blobFoodDelta.eaten.push(fid);
+
+            const newF = spawnFoodPellet();
+            blobFoodDelta.added.push(newF);
+          }
+        }
+      }
+
+      // Pastilles éjectées mangées
+      for (let i = blobState.ejected.length - 1; i >= 0; i--) {
+        const ep = blobState.ejected[i];
+        const d = Math.hypot(cell.x - ep.x, cell.y - ep.y);
+        if (d < cell.radius) {
+          cell.mass += ep.mass;
+          blobState.ejected.splice(i, 1);
+        }
+      }
+
+      // Collision avec les Virus
+      blobState.viruses.forEach(virus => {
+        const d = Math.hypot(cell.x - virus.x, cell.y - virus.y);
+        if (d < cell.radius + virus.radius && cell.radius > virus.radius * 1.1) {
+          if (p.cells.length < 8 && cell.mass >= 40) {
+            const splitCount = Math.min(4, Math.floor(cell.mass / 25));
+            const newMass = Math.floor(cell.mass / (splitCount + 1));
+            cell.mass = newMass;
+            cell.canMergeAt = now + 18000;
+
+            for (let k = 0; k < splitCount; k++) {
+              const angle = (k / splitCount) * Math.PI * 2;
+              p.cells.push({
+                id: Math.random(),
+                x: cell.x + Math.cos(angle) * (cell.radius + 15),
+                y: cell.y + Math.sin(angle) * (cell.radius + 15),
+                radius: Math.sqrt(newMass * 26),
+                mass: newMass,
+                vx: Math.cos(angle) * 14,
+                vy: Math.sin(angle) * 14,
+                canMergeAt: now + 18000
+              });
+            }
+            if (!p.isBot) {
+              io.to(p.id).emit('blob_sound', 'absorbed');
+            }
+          }
+        }
+      });
+    });
+  }
+
+  // 4. Absorption Cellule vs Cellule
+  const allPlayers = Object.values(blobState.players).filter(p => p.isAlive);
+  for (let i = 0; i < allPlayers.length; i++) {
+    for (let j = 0; j < allPlayers.length; j++) {
+      if (i === j) continue;
+      const pA = allPlayers[i];
+      const pB = allPlayers[j];
+
+      for (let ci = 0; ci < pA.cells.length; ci++) {
+        const cellA = pA.cells[ci];
+        if (!cellA) continue;
+
+        for (let cj = pB.cells.length - 1; cj >= 0; cj--) {
+          const cellB = pB.cells[cj];
+          if (!cellB) continue;
+
+          const d = Math.hypot(cellA.x - cellB.x, cellA.y - cellB.y);
+          if (d < cellA.radius && cellA.mass > cellB.mass * 1.15) {
+            cellA.mass += cellB.mass;
+            pB.cells.splice(cj, 1);
+
+            if (!pA.isBot) {
+              io.to(pA.id).emit('blob_sound', 'eat');
+            }
+
+            if (pB.cells.length === 0) {
+              pB.isAlive = false;
+              pB.killedBy = pA.name;
+              io.to('blob_room').emit('blob_feed', `${pA.name} a dévoré ${pB.name} !`);
+              if (!pB.isBot) {
+                io.to(pB.id).emit('blob_sound', 'absorbed');
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
 function getHubStats() {
   const total = io.engine ? io.engine.clientsCount : (io.sockets?.sockets?.size || 0);
   return {
     totalOnline: total,
     tankPlayers: getActiveTankPlayersCount(),
-    pongPlayers: getActivePongPlayersCount()
+    pongPlayers: getActivePongPlayersCount(),
+    blobPlayers: getActiveBlobPlayersCount()
   };
 }
 
@@ -759,6 +1134,119 @@ io.on('connection', (socket) => {
     }
   });
 
+  // --- Événements Blob Clash (Agar.io) ---
+  socket.on('blob_join', (data) => {
+    socket.join('blob_room');
+    const spawn = getSafeBlobSpawn();
+    const color = data?.color || '#10b981';
+    const name = (data?.name || 'Cellule').substring(0, 15);
+
+    blobState.players[socket.id] = {
+      id: socket.id,
+      name: name,
+      color: color,
+      isBot: false,
+      isAlive: true,
+      killedBy: null,
+      target: { x: spawn.x, y: spawn.y },
+      cells: [{
+        id: 1,
+        x: spawn.x,
+        y: spawn.y,
+        radius: 22,
+        mass: 20,
+        vx: 0,
+        vy: 0,
+        canMergeAt: 0
+      }]
+    };
+
+    socket.emit('blob_init', {
+      myId: socket.id,
+      map: { width: BLOB_MAP_WIDTH, height: BLOB_MAP_HEIGHT },
+      viruses: blobState.viruses,
+      food: Array.from(blobState.food.values())
+    });
+
+    broadcastHubStats();
+  });
+
+  socket.on('blob_target', (coords) => {
+    const p = blobState.players[socket.id];
+    if (p && p.isAlive && typeof coords?.x === 'number' && typeof coords?.y === 'number') {
+      p.target.x = coords.x;
+      p.target.y = coords.y;
+    }
+  });
+
+  socket.on('blob_split', () => {
+    const p = blobState.players[socket.id];
+    if (!p || !p.isAlive) return;
+    const now = Date.now();
+    const originalCells = [...p.cells];
+
+    originalCells.forEach(cell => {
+      if (cell.mass >= 36 && p.cells.length < 8) {
+        const halfMass = Math.floor(cell.mass / 2);
+        cell.mass = halfMass;
+        cell.canMergeAt = now + 15000;
+
+        const dx = p.target.x - cell.x;
+        const dy = p.target.y - cell.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        const dirX = dx / dist;
+        const dirY = dy / dist;
+
+        p.cells.push({
+          id: Math.random(),
+          x: cell.x + dirX * (cell.radius + 15),
+          y: cell.y + dirY * (cell.radius + 15),
+          radius: Math.sqrt(halfMass * 26),
+          mass: halfMass,
+          vx: dirX * 16,
+          vy: dirY * 16,
+          canMergeAt: now + 15000
+        });
+      }
+    });
+    socket.emit('blob_sound', 'split');
+  });
+
+  socket.on('blob_eject', () => {
+    const p = blobState.players[socket.id];
+    if (!p || !p.isAlive) return;
+
+    p.cells.forEach(cell => {
+      if (cell.mass >= 30) {
+        cell.mass -= 4;
+        const dx = p.target.x - cell.x;
+        const dy = p.target.y - cell.y;
+        const dist = Math.hypot(dx, dy) || 1;
+        const dirX = dx / dist;
+        const dirY = dy / dist;
+
+        blobState.ejected.push({
+          id: blobState.nextId++,
+          x: cell.x + dirX * (cell.radius + 12),
+          y: cell.y + dirY * (cell.radius + 12),
+          vx: dirX * 12,
+          vy: dirY * 12,
+          radius: 8,
+          mass: 4,
+          color: p.color
+        });
+      }
+    });
+  });
+
+  socket.on('blob_leave', () => {
+    if (blobState.players[socket.id]) {
+      delete blobState.players[socket.id];
+    }
+    socket.leave('blob_room');
+    broadcastHubStats();
+  });
+
   // --- Déconnexion ---
   socket.on('disconnect', () => {
     if (gameState.players[socket.id]) {
@@ -772,6 +1260,9 @@ io.on('connection', (socket) => {
       manageBots();
     }
     handlePongDisconnect(socket.id);
+    if (blobState.players[socket.id]) {
+      delete blobState.players[socket.id];
+    }
     broadcastHubStats();
     console.log(`[-] Joueur déconnecté: ${socket.id}`);
   });
@@ -881,6 +1372,60 @@ setInterval(() => {
     io.to('pong_room').emit('pong_state', pongState);
   }
 }, 1000 / 35);
+
+// Boucle principale de simulation Blob Clash (45 Ticks / seconde)
+setInterval(() => {
+  updateBlobPhysics();
+}, 1000 / 45);
+
+// Diffusion réseau Blob Clash vers 'blob_room' (30 fois / seconde)
+setInterval(() => {
+  const humanCount = Object.values(blobState.players).filter(p => !p.isBot).length;
+  if (humanCount === 0) return;
+
+  const leaderboard = Object.values(blobState.players)
+    .filter(p => p.isAlive && p.cells && p.cells.length > 0)
+    .map(p => ({
+      id: p.id,
+      name: p.name,
+      mass: p.cells.reduce((sum, c) => sum + c.mass, 0)
+    }))
+    .sort((a, b) => b.mass - a.mass)
+    .slice(0, 5);
+
+  const minimalPlayers = {};
+  for (const id in blobState.players) {
+    const p = blobState.players[id];
+    minimalPlayers[id] = {
+      id: p.id,
+      name: p.name,
+      color: p.color,
+      isAlive: p.isAlive,
+      killedBy: p.killedBy,
+      cells: (p.cells || []).map(c => ({
+        x: Math.round(c.x),
+        y: Math.round(c.y),
+        radius: Math.round(c.radius),
+        mass: Math.round(c.mass)
+      }))
+    };
+  }
+
+  io.to('blob_room').emit('blob_state', {
+    players: minimalPlayers,
+    ejected: blobState.ejected.map(e => ({ x: Math.round(e.x), y: Math.round(e.y), color: e.color, radius: e.radius })),
+    leaderboard
+  });
+
+  if (blobFoodDelta.eaten.length > 0 || blobFoodDelta.added.length > 0) {
+    io.to('blob_room').emit('blob_food_sync', {
+      eaten: blobFoodDelta.eaten,
+      added: blobFoodDelta.added
+    });
+    blobFoodDelta.eaten = [];
+    blobFoodDelta.added = [];
+  }
+}, 1000 / 30);
 
 let botCheckTimer = 0;
 

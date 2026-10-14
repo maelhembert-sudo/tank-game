@@ -64,6 +64,29 @@
           <a id="btn-pong-join" href="/pong.html" class="btn-launch btn-pong">LANCER LE PONG 🏓</a>
         </div>
       </div>
+
+      <!-- Jeu 3 : Blob Clash (Agar.io) -->
+      <div class="game-card blob-card">
+        <div>
+          <div class="card-top">
+            <span class="game-icon">🧬</span>
+            <span class="game-tag tag-blob">Bataille Virale</span>
+          </div>
+          <h2 class="game-name">Blob Clash (Agar.io)</h2>
+          <p class="game-desc">
+            Mangez des orbes lumineuses pour grossir, absorbez les cellules plus petites et fuyez les géants ! 
+            Découpez-vous en morceaux pour attaquer (Espace) et éjectez de la masse (W). Bots IA en direct.
+          </p>
+        </div>
+
+        <div>
+          <div class="game-status-bar">
+            <span class="status-indicator"></span>
+            <span id="blob-status-text">🧬 <b id="blob-count">0</b> joueur(s) en direct</span>
+          </div>
+          <a href="/blob.html" class="btn-launch btn-blob">REJOINDRE L'ARÈNE 🧬</a>
+        </div>
+      </div>
     </main>
 
     <footer class="hub-footer">
@@ -81,6 +104,7 @@
       document.getElementById('global-players-count').innerHTML = `🟢 <b>${stats.totalOnline}</b> joueur(s) connecté(s) en direct`;
       document.getElementById('tank-count').textContent = stats.tankPlayers;
       document.getElementById('pong-count').textContent = stats.pongPlayers;
+      document.getElementById('blob-count').textContent = stats.blobPlayers || 0;
 
       const pongStatusText = document.getElementById('pong-status-text');
       const pongDot = document.getElementById('pong-status-dot');

@@ -1,0 +1,100 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Blob Clash (Agar.io) - Arcade Clash</title>
+  <link rel="stylesheet" href="blob.css">
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+  <!-- Écran de connexion au jeu -->
+  <div id="blob-lobby-screen" class="overlay-screen">
+    <div class="lobby-card">
+      <div class="logo-container">
+        <span class="game-icon">🧬</span>
+        <h1>BLOB CLASH</h1>
+        <p class="subtitle">Bataille Virale en Temps Réel • Inspiré d'Agar.io</p>
+      </div>
+
+      <div class="form-group">
+        <label for="player-name">Pseudo de votre cellule :</label>
+        <input type="text" id="player-name" placeholder="Ex: AmoebaX" maxlength="15" autocomplete="off" />
+      </div>
+
+      <div class="form-group">
+        <label>Couleur du cytoplasme :</label>
+        <div class="color-palette" id="color-palette">
+          <button type="button" class="color-btn selected" data-color="#10b981" style="background: #10b981;"></button>
+          <button type="button" class="color-btn" data-color="#00d2ff" style="background: #00d2ff;"></button>
+          <button type="button" class="color-btn" data-color="#ff007f" style="background: #ff007f;"></button>
+          <button type="button" class="color-btn" data-color="#ff9f1c" style="background: #ff9f1c;"></button>
+          <button type="button" class="color-btn" data-color="#9d4edd" style="background: #9d4edd;"></button>
+          <button type="button" class="color-btn" data-color="#e52d27" style="background: #e52d27;"></button>
+          <button type="button" class="color-btn" data-color="#facc15" style="background: #facc15;"></button>
+        </div>
+      </div>
+
+      <button id="btn-start" class="btn-play">ENTRER DANS L'ARÈNE 🧬</button>
+      <a href="/" class="btn-back-link">← Retour au Hub Arcade</a>
+
+      <div class="instructions-panel">
+        <div class="instruction-col">
+          <strong>💻 Sur PC :</strong>
+          <span><b>Curseur Souris</b> : Diriger la cellule</span>
+          <span><b>Espace</b> : Se diviser (Split) pour bondir</span>
+          <span><b>W</b> : Éjecter de la masse</span>
+        </div>
+        <div class="instruction-col">
+          <strong>📱 Sur Smartphone / Tablette :</strong>
+          <span><b>Toucher / Glisser</b> : Déplacer la cellule</span>
+          <span><b>Boutons ⚡ et 💧</b> : Split & Éjecter</span>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- HUD en jeu -->
+  <div id="blob-hud" class="hud-container hidden">
+    <!-- Barre Supérieure -->
+    <div class="hud-top-bar">
+      <div class="hud-top-left">
+        <a href="/" class="btn-nav-hub" id="btn-hub-exit">🏠 Menu</a>
+        <button id="btn-toggle-sound" class="btn-nav-hub">🔊 Son</button>
+        <div class="mass-badge">Masse : <b id="blob-mass-val">20</b></div>
+      </div>
+
+      <!-- Classement en direct -->
+      <div class="leaderboard-panel">
+        <div class="leaderboard-title">🏆 TOP 5 CELLULES</div>
+        <div id="leaderboard-list"></div>
+      </div>
+    </div>
+
+    <!-- Feed des absorptions -->
+    <div id="feed-container" class="feed-container"></div>
+
+    <!-- Contrôles Tactiles Mobiles -->
+    <div class="touch-action-bar">
+      <button id="btn-touch-split" class="touch-circle-btn btn-split">⚡ SPLIT</button>
+      <button id="btn-touch-eject" class="touch-circle-btn btn-eject">💧 NOURRIR</button>
+    </div>
+  </div>
+
+  <!-- Overlay Écran de Mort -->
+  <div id="death-overlay" class="overlay-screen hidden">
+    <div class="lobby-card death-card">
+      <h2 class="death-title">ABSORBÉ ! 💥</h2>
+      <p id="death-killer-text" class="death-subtitle">Vous avez été dévoré par un prédateur géant.</p>
+      <div class="death-stat">Masse atteinte : <b id="death-max-mass">20</b></div>
+      <button id="btn-respawn" class="btn-play">REJOUER 🔄</button>
+      <a href="/" class="btn-back-link">← Retour au Hub Arcade</a>
+    </div>
+  </div>
+
+  <!-- Canvas plein écran -->
+  <canvas id="blobCanvas"></canvas>
+
+  <script src="js/blob.js"></script>
+</body>
+</html>
