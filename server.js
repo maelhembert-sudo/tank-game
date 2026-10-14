@@ -16,6 +16,14 @@ const PORT = process.env.PORT || 3000;
 // Servir les fichiers statiques depuis /public
 app.use(express.static(path.join(__dirname, 'public')));
 
+// Raccourcis d'URL conviviaux
+app.get('/tank', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'tank.html'));
+});
+app.get('/pong', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'pong.html'));
+});
+
 // Dimensions de l'arène de jeu
 const MAP_WIDTH = 1800;
 const MAP_HEIGHT = 1200;
@@ -292,16 +300,280 @@ function updateBotAI(bot, now) {
   }
 }
 
+// ==========================================
+// CONFIGURATION & SALLES DU JEU NEON PONG 1v1
+// ==========================================
+const PONG_WIDTH = 900;
+const PONG_HEIGHT = 550;
+const PADDLE_WIDTH = 14;
+const PADDLE_HEIGHT = 100;
+const PADDLE_SPEED = 7;
+const BOT_SPEED = 5.2;
+
+const pongRooms = {
+  p1: null, // Socket ID du Joueur 1
+  p2: null, // Socket ID du Joueur 2
+  spectators: new Set(),
+  inputs: {} // socketId -> { up: bool, down: bool }
+};
+
+let pongState = {
+  width: PONG_WIDTH,
+  height: PONG_HEIGHT,
+  p1: { y: (PONG_HEIGHT - PADDLE_HEIGHT) / 2, width: PADDLE_WIDTH, height: PADDLE_HEIGHT, score: 0, name: 'Joueur 1' },
+  p2: { y: (PONG_HEIGHT - PADDLE_HEIGHT) / 2, width: PADDLE_WIDTH, height: PADDLE_HEIGHT, score: 0, name: '🤖 Bot IA', isBot: true },
+  ball: { x: PONG_WIDTH / 2, y: PONG_HEIGHT / 2, radius: 9, vx: 6, vy: 3 },
+  isGameOver: false,
+  winner: null
+};
+
+let pongServeCountdown = 45; // Délais avant remise en jeu (~0.75s)
+
+function resetPongBall(servingToRight = Math.random() > 0.5) {
+  pongState.ball.x = PONG_WIDTH / 2;
+  pongState.ball.y = PONG_HEIGHT / 2;
+  const angle = (Math.random() * 0.6 - 0.3);
+  const speed = 6.5;
+  pongState.ball.vx = (servingToRight ? 1 : -1) * speed * Math.cos(angle);
+  pongState.ball.vy = speed * Math.sin(angle);
+  pongServeCountdown = 45;
+}
+
+function resetPongMatch() {
+  pongState.p1.score = 0;
+  pongState.p2.score = 0;
+  pongState.isGameOver = false;
+  pongState.winner = null;
+  pongState.p1.y = (PONG_HEIGHT - PADDLE_HEIGHT) / 2;
+  pongState.p2.y = (PONG_HEIGHT - PADDLE_HEIGHT) / 2;
+  resetPongBall();
+}
+
+function updatePongNamesAndRoles() {
+  pongState.p1.name = 'Joueur 1';
+  if (pongRooms.p2) {
+    pongState.p2.name = 'Joueur 2';
+    pongState.p2.isBot = false;
+  } else {
+    pongState.p2.name = '🤖 Bot IA';
+    pongState.p2.isBot = true;
+  }
+}
+
+function handlePongDisconnect(socketId) {
+  let changed = false;
+
+  if (pongRooms.inputs[socketId]) {
+    delete pongRooms.inputs[socketId];
+  }
+
+  if (socketId === pongRooms.p1) {
+    changed = true;
+    if (pongRooms.p2) {
+      pongRooms.p1 = pongRooms.p2;
+      pongRooms.p2 = null;
+      io.to(pongRooms.p1).emit('pong_role', { role: 'p1' });
+
+      if (pongRooms.spectators.size > 0) {
+        const nextUser = pongRooms.spectators.values().next().value;
+        pongRooms.spectators.delete(nextUser);
+        pongRooms.p2 = nextUser;
+        io.to(nextUser).emit('pong_role', { role: 'p2' });
+      }
+    } else {
+      pongRooms.p1 = null;
+      resetPongMatch();
+    }
+  } else if (socketId === pongRooms.p2) {
+    changed = true;
+    pongRooms.p2 = null;
+
+    if (pongRooms.spectators.size > 0) {
+      const nextUser = pongRooms.spectators.values().next().value;
+      pongRooms.spectators.delete(nextUser);
+      pongRooms.p2 = nextUser;
+      io.to(nextUser).emit('pong_role', { role: 'p2' });
+    }
+  } else if (pongRooms.spectators.has(socketId)) {
+    pongRooms.spectators.delete(socketId);
+    changed = true;
+  }
+
+  updatePongNamesAndRoles();
+  if (changed) {
+    broadcastHubStats();
+  }
+}
+
+function updatePongPhysics() {
+  if (!pongRooms.p1) return;
+
+  // 1. Mouvement des Raquettes
+  if (pongRooms.p1 && pongRooms.inputs[pongRooms.p1]) {
+    const inp = pongRooms.inputs[pongRooms.p1];
+    if (inp.up) pongState.p1.y = Math.max(0, pongState.p1.y - PADDLE_SPEED);
+    if (inp.down) pongState.p1.y = Math.min(PONG_HEIGHT - PADDLE_HEIGHT, pongState.p1.y + PADDLE_SPEED);
+  }
+
+  if (pongRooms.p2) {
+    if (pongRooms.inputs[pongRooms.p2]) {
+      const inp = pongRooms.inputs[pongRooms.p2];
+      if (inp.up) pongState.p2.y = Math.max(0, pongState.p2.y - PADDLE_SPEED);
+      if (inp.down) pongState.p2.y = Math.min(PONG_HEIGHT - PADDLE_HEIGHT, pongState.p2.y + PADDLE_SPEED);
+    }
+  } else {
+    // Bot IA
+    const paddleCenter = pongState.p2.y + PADDLE_HEIGHT / 2;
+    let targetY = PONG_HEIGHT / 2;
+    if (pongState.ball.vx > 0) {
+      targetY = pongState.ball.y;
+    }
+    const diff = targetY - paddleCenter;
+    if (Math.abs(diff) > 6) {
+      if (diff > 0) {
+        pongState.p2.y = Math.min(PONG_HEIGHT - PADDLE_HEIGHT, pongState.p2.y + BOT_SPEED);
+      } else {
+        pongState.p2.y = Math.max(0, pongState.p2.y - BOT_SPEED);
+      }
+    } else if (pongState.ball.vx <= 0) {
+      const centerDiff = (PONG_HEIGHT / 2) - paddleCenter;
+      if (Math.abs(centerDiff) > 10) {
+        pongState.p2.y += Math.sign(centerDiff) * 2.2;
+      }
+    }
+  }
+
+  // 2. Pause de service
+  if (pongServeCountdown > 0) {
+    pongServeCountdown--;
+    return;
+  }
+
+  if (pongState.isGameOver) return;
+
+  // 3. Déplacement de la balle
+  pongState.ball.x += pongState.ball.vx;
+  pongState.ball.y += pongState.ball.vy;
+
+  // Rebond haut / bas
+  if (pongState.ball.y - pongState.ball.radius <= 0) {
+    pongState.ball.y = pongState.ball.radius;
+    pongState.ball.vy = -pongState.ball.vy;
+    io.to('pong_room').emit('pong_sound', 'wall');
+  } else if (pongState.ball.y + pongState.ball.radius >= PONG_HEIGHT) {
+    pongState.ball.y = PONG_HEIGHT - pongState.ball.radius;
+    pongState.ball.vy = -pongState.ball.vy;
+    io.to('pong_room').emit('pong_sound', 'wall');
+  }
+
+  // Rebond Raquette P1 (Gauche, X: 30 -> 44)
+  const p1X = 30;
+  const p1Right = p1X + PADDLE_WIDTH;
+  if (pongState.ball.vx < 0 &&
+      pongState.ball.x - pongState.ball.radius <= p1Right &&
+      pongState.ball.x + pongState.ball.radius >= p1X) {
+    if (pongState.ball.y + pongState.ball.radius >= pongState.p1.y &&
+        pongState.ball.y - pongState.ball.radius <= pongState.p1.y + PADDLE_HEIGHT) {
+      const hitOffset = (pongState.ball.y - (pongState.p1.y + PADDLE_HEIGHT / 2)) / (PADDLE_HEIGHT / 2);
+      const clampedOffset = Math.max(-1, Math.min(1, hitOffset));
+      const angle = clampedOffset * (Math.PI / 3);
+      const speed = Math.min(14, Math.hypot(pongState.ball.vx, pongState.ball.vy) + 0.35);
+      pongState.ball.vx = speed * Math.cos(angle);
+      pongState.ball.vy = speed * Math.sin(angle);
+      pongState.ball.x = p1Right + pongState.ball.radius;
+      io.to('pong_room').emit('pong_sound', 'hit');
+    }
+  }
+
+  // Rebond Raquette P2 (Droite, X: 856 -> 870)
+  const p2X = PONG_WIDTH - 30 - PADDLE_WIDTH;
+  const p2Right = p2X + PADDLE_WIDTH;
+  if (pongState.ball.vx > 0 &&
+      pongState.ball.x + pongState.ball.radius >= p2X &&
+      pongState.ball.x - pongState.ball.radius <= p2Right) {
+    if (pongState.ball.y + pongState.ball.radius >= pongState.p2.y &&
+        pongState.ball.y - pongState.ball.radius <= pongState.p2.y + PADDLE_HEIGHT) {
+      const hitOffset = (pongState.ball.y - (pongState.p2.y + PADDLE_HEIGHT / 2)) / (PADDLE_HEIGHT / 2);
+      const clampedOffset = Math.max(-1, Math.min(1, hitOffset));
+      const angle = clampedOffset * (Math.PI / 3);
+      const speed = Math.min(14, Math.hypot(pongState.ball.vx, pongState.ball.vy) + 0.35);
+      pongState.ball.vx = -speed * Math.cos(angle);
+      pongState.ball.vy = speed * Math.sin(angle);
+      pongState.ball.x = p2X - pongState.ball.radius;
+      io.to('pong_room').emit('pong_sound', 'hit');
+    }
+  }
+
+  // Point marqué
+  if (pongState.ball.x < 0) {
+    pongState.p2.score++;
+    io.to('pong_room').emit('pong_sound', 'score');
+    if (pongState.p2.score >= 7) {
+      pongState.isGameOver = true;
+      pongState.winner = pongState.p2.isBot ? '🤖 Bot IA' : pongState.p2.name;
+    } else {
+      resetPongBall(true);
+    }
+  } else if (pongState.ball.x > PONG_WIDTH) {
+    pongState.p1.score++;
+    io.to('pong_room').emit('pong_sound', 'score');
+    if (pongState.p1.score >= 7) {
+      pongState.isGameOver = true;
+      pongState.winner = pongState.p1.name;
+    } else {
+      resetPongBall(false);
+    }
+  }
+}
+
+// ==========================================
+// STATISTIQUES DU HUB EN DIRECT
+// ==========================================
+function getActiveTankPlayersCount() {
+  return Object.values(gameState.players).filter(p => !p.isBot).length;
+}
+
+function getActivePongPlayersCount() {
+  let count = 0;
+  if (pongRooms.p1) count++;
+  if (pongRooms.p2) count++;
+  return count;
+}
+
+function getHubStats() {
+  const total = io.engine ? io.engine.clientsCount : (io.sockets?.sockets?.size || 0);
+  return {
+    totalOnline: total,
+    tankPlayers: getActiveTankPlayersCount(),
+    pongPlayers: getActivePongPlayersCount()
+  };
+}
+
+function broadcastHubStats() {
+  io.emit('hub_stats', getHubStats());
+}
+
+// Diffusion régulière des statistiques du hub
+setInterval(broadcastHubStats, 2500);
+
+// ==========================================
+// GESTION DES CONNEXIONS SOCKET.IO
+// ==========================================
 io.on('connection', (socket) => {
   console.log(`[+] Joueur connecté: ${socket.id}`);
 
-  // Envoi de la configuration initiale de la carte
+  // Envoi immédiat des statistiques du hub au nouveau client
+  socket.emit('hub_stats', getHubStats());
+  broadcastHubStats();
+
+  // Envoi de la configuration initiale de la carte Tank
   socket.emit('init_map', {
     width: MAP_WIDTH,
     height: MAP_HEIGHT,
     walls: WALLS
   });
 
+  // --- Événements Tank Clash ---
   socket.on('join_game', (data) => {
     const spawn = getSafeSpawn();
     const colorIndex = Object.keys(gameState.players).length % TANK_COLORS.length;
@@ -348,13 +620,13 @@ io.on('connection', (socket) => {
       color: '#4ade80'
     });
     manageBots();
+    broadcastHubStats();
   });
 
   socket.on('player_input', (inputData) => {
     const player = gameState.players[socket.id];
     if (player && player.isAlive) {
       player.inputs = inputData;
-      // Tourelle fixe : alignée en permanence avec l'orientation du châssis
       player.turretAngle = player.bodyAngle;
 
       if (inputData.shoot) {
@@ -363,6 +635,50 @@ io.on('connection', (socket) => {
     }
   });
 
+  // --- Événements Neon Pong 1v1 ---
+  socket.on('pong_join', () => {
+    socket.join('pong_room');
+
+    if (!pongRooms.p1) {
+      pongRooms.p1 = socket.id;
+      socket.emit('pong_role', { role: 'p1' });
+    } else if (!pongRooms.p2) {
+      pongRooms.p2 = socket.id;
+      socket.emit('pong_role', { role: 'p2' });
+    } else {
+      pongRooms.spectators.add(socket.id);
+      socket.emit('pong_role', { role: 'spectator' });
+    }
+
+    updatePongNamesAndRoles();
+    socket.emit('pong_state', pongState);
+    broadcastHubStats();
+  });
+
+  socket.on('pong_input', (inputData) => {
+    if (socket.id !== pongRooms.p1 && socket.id !== pongRooms.p2) return;
+    pongRooms.inputs[socket.id] = inputData;
+  });
+
+  socket.on('pong_paddle_move', (data) => {
+    if (socket.id !== pongRooms.p1 && socket.id !== pongRooms.p2) return;
+    if (typeof data?.y !== 'number') return;
+    const clampedY = Math.max(0, Math.min(PONG_HEIGHT - PADDLE_HEIGHT, data.y));
+    if (socket.id === pongRooms.p1) {
+      pongState.p1.y = clampedY;
+    } else if (socket.id === pongRooms.p2) {
+      pongState.p2.y = clampedY;
+    }
+  });
+
+  socket.on('pong_restart', () => {
+    if (socket.id === pongRooms.p1 || socket.id === pongRooms.p2) {
+      resetPongMatch();
+      io.to('pong_room').emit('pong_state', pongState);
+    }
+  });
+
+  // --- Déconnexion ---
   socket.on('disconnect', () => {
     if (gameState.players[socket.id]) {
       const name = gameState.players[socket.id].name;
@@ -374,6 +690,8 @@ io.on('connection', (socket) => {
       });
       manageBots();
     }
+    handlePongDisconnect(socket.id);
+    broadcastHubStats();
     console.log(`[-] Joueur déconnecté: ${socket.id}`);
   });
 });
@@ -469,6 +787,18 @@ setInterval(() => {
 
   // Nettoyage des explosions après diffusion
   gameState.explosions = [];
+}, 1000 / 35);
+
+// Boucle principale de simulation Pong (60 Ticks / seconde)
+setInterval(() => {
+  updatePongPhysics();
+}, 1000 / TICK_RATE);
+
+// Diffusion réseau Pong vers la salle 'pong_room' (35 fois / seconde)
+setInterval(() => {
+  if (pongRooms.p1) {
+    io.to('pong_room').emit('pong_state', pongState);
+  }
 }, 1000 / 35);
 
 let botCheckTimer = 0;

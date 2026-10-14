@@ -2,117 +2,104 @@
 <html lang="fr">
 <head>
   <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-  <title>Tank Clash 2D - Multijoueur LAN</title>
-  <link rel="stylesheet" href="style.css">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Arcade Clash - Plateforme de Jeux Multijoueurs</title>
+  <link rel="stylesheet" href="hub.css">
   <script src="/socket.io/socket.io.js"></script>
 </head>
 <body>
-  <!-- Écran d'accueil / Salon de connexion -->
-  <div id="lobby-screen" class="overlay-screen">
-    <div class="lobby-card">
-      <div class="logo-container">
-        <span class="tank-icon">⚔️</span>
-        <h1>TANK CLASH 2D</h1>
-        <p class="subtitle">Bataille Multijoueur Réseau Local (LAN)</p>
-      </div>
-
-      <div class="form-group">
-        <label for="player-name">Pseudo du Tankiste :</label>
-        <input type="text" id="player-name" placeholder="Ex: Panzerwaffe" maxlength="15" autocomplete="off" />
-      </div>
-
-      <div class="form-group">
-        <label>Couleur du blindage :</label>
-        <div class="color-palette" id="color-palette">
-          <button type="button" class="color-btn selected" data-color="#e52d27" style="background: #e52d27;"></button>
-          <button type="button" class="color-btn" data-color="#00b4d8" style="background: #00b4d8;"></button>
-          <button type="button" class="color-btn" data-color="#2ec4b6" style="background: #2ec4b6;"></button>
-          <button type="button" class="color-btn" data-color="#ff9f1c" style="background: #ff9f1c;"></button>
-          <button type="button" class="color-btn" data-color="#9d4edd" style="background: #9d4edd;"></button>
-          <button type="button" class="color-btn" data-color="#ff006e" style="background: #ff006e;"></button>
-          <button type="button" class="color-btn" data-color="#80ed99" style="background: #80ed99;"></button>
-        </div>
-      </div>
-
-      <button id="btn-start" class="btn-play">ENTRER DANS L'ARÈNE 🚀</button>
-
-      <div class="instructions-panel">
-        <div class="instruction-col">
-          <strong>💻 Sur PC :</strong>
-          <span><b>Z, Q, S, D</b> ou <b>Flèches</b> : Piloter & Viser (tourelle fixe)</span>
-          <span><b>Clic Gauche</b> ou <b>Espace</b> : Tirer</span>
-        </div>
-        <div class="instruction-col">
-          <strong>📱 Sur Smartphone / Tablette :</strong>
-          <span><b>Joystick</b> : Se déplacer & Viser</span>
-          <span><b>Bouton FEU</b> : Tirer</span>
-        </div>
-      </div>
-
-      <div class="lan-info-banner">
+  <div class="hub-container">
+    <header class="hub-header">
+      <div class="hub-badge">
         <span class="pulse-dot"></span>
-        <span id="lan-url-text">Pour inviter d'autres appareils : partagez l'adresse IP affichée dans la console.</span>
+        <span id="global-players-count">Chargement des joueurs en direct...</span>
       </div>
-    </div>
+      <h1 class="hub-title">ARCADE CLASH</h1>
+      <p class="hub-subtitle">Plateforme de mini-jeux multijoueurs en temps réel. Jouez entre amis ou contre des bots !</p>
+    </header>
+
+    <main class="games-grid">
+      <!-- Jeu 1 : Tank Clash 2D -->
+      <div class="game-card tank-card">
+        <div>
+          <div class="card-top">
+            <span class="game-icon">⚔️</span>
+            <span class="game-tag tag-tank">Arène Ouverte</span>
+          </div>
+          <h2 class="game-name">Tank Clash 2D</h2>
+          <p class="game-desc">
+            Bataille d'arène en temps réel avec obus rebondissants, bouclier d'énergie physique destructible et bonus. 
+            Jouez entre amis ou défiez automatiquement 2 bots IA en solo.
+          </p>
+        </div>
+
+        <div>
+          <div class="game-status-bar">
+            <span class="status-indicator"></span>
+            <span id="tank-status-text">👥 <b id="tank-count">0</b> joueur(s) en direct</span>
+          </div>
+          <a href="/tank.html" class="btn-launch btn-tank">REJOINDRE L'ARÈNE 🚀</a>
+        </div>
+      </div>
+
+      <!-- Jeu 2 : Neon Pong 1v1 -->
+      <div class="game-card pong-card">
+        <div>
+          <div class="card-top">
+            <span class="game-icon">🏓</span>
+            <span class="game-tag tag-pong">Duel 1v1</span>
+          </div>
+          <h2 class="game-name">Neon Pong 1v1</h2>
+          <p class="game-desc">
+            Le duel arcade mythique revisité en multijoueur temps réel. 
+            Si vous êtes seul, affrontez une IA réactive. Dès qu'un ami vous rejoint, le match 1v1 s'engage ! Limité à 2 joueurs max.
+          </p>
+        </div>
+
+        <div>
+          <div class="game-status-bar">
+            <span id="pong-status-dot" class="status-indicator"></span>
+            <span id="pong-status-text">🏓 <b id="pong-count">0</b>/2 Joueurs</span>
+          </div>
+          <a id="btn-pong-join" href="/pong.html" class="btn-launch btn-pong">LANCER LE PONG 🏓</a>
+        </div>
+      </div>
+    </main>
+
+    <footer class="hub-footer">
+      <p>Propulsé par WebSockets & Node.js • Déployé sur Render</p>
+    </footer>
   </div>
 
-  <!-- Interface HUD en jeu -->
-  <div id="game-hud" class="hud-container hidden">
-    <!-- Barre de vie & Statuts -->
-    <div class="hud-top-left">
-      <div class="player-tag">
-        <span id="hud-name">Joueur</span>
-      </div>
-      <div class="health-bar-container">
-        <div id="hud-health-fill" class="health-fill" style="width: 100%;"></div>
-        <span id="hud-health-text">100 / 100</span>
-      </div>
-      <div id="hud-buffs" class="buffs-container"></div>
-    </div>
+  <script>
+    // Connexion au serveur pour les stats en direct
+    const socket = io({
+      transports: ['websocket', 'polling']
+    });
 
-    <!-- Tableau des scores -->
-    <div class="hud-top-right">
-      <div class="leaderboard-box">
-        <div class="leaderboard-title">🏆 CLASSEMENT</div>
-        <div id="leaderboard-list"></div>
-      </div>
-    </div>
+    socket.on('hub_stats', (stats) => {
+      document.getElementById('global-players-count').innerHTML = `🟢 <b>${stats.totalOnline}</b> joueur(s) connecté(s) en direct`;
+      document.getElementById('tank-count').textContent = stats.tankPlayers;
+      document.getElementById('pong-count').textContent = stats.pongPlayers;
 
-    <!-- Feed d'événements / Kills -->
-    <div id="kill-feed" class="kill-feed-container"></div>
+      const pongStatusText = document.getElementById('pong-status-text');
+      const pongDot = document.getElementById('pong-status-dot');
+      const pongBtn = document.getElementById('btn-pong-join');
 
-    <!-- Bouton Audio -->
-    <button id="btn-toggle-sound" class="btn-sound" title="Activer / Couper le son">🔊</button>
-  </div>
-
-  <!-- Écran de réapparition (Mort) -->
-  <div id="death-overlay" class="death-overlay hidden">
-    <div class="death-message">
-      <h2>TANK DÉTRUIT ! 💥</h2>
-      <p>Réapparition dans <span id="respawn-counter">3</span>s...</p>
-    </div>
-  </div>
-
-  <!-- Contrôles Tactiles Mobiles -->
-  <div id="touch-controls" class="touch-container hidden">
-    <div id="touch-move-zone" class="touch-zone left-zone">
-      <div id="touch-move-base" class="joystick-base">
-        <div id="touch-move-stick" class="joystick-stick"></div>
-      </div>
-    </div>
-    <div id="touch-aim-zone" class="touch-zone right-zone">
-      <div id="touch-aim-base" class="joystick-base">
-        <div id="touch-aim-stick" class="joystick-stick"></div>
-      </div>
-      <button id="touch-fire-btn" class="touch-fire-button">FEU 🔥</button>
-    </div>
-  </div>
-
-  <!-- Le Canvas du jeu -->
-  <canvas id="gameCanvas"></canvas>
-
-  <script src="js/game.js"></script>
+      if (stats.pongPlayers >= 2) {
+        pongStatusText.innerHTML = `⚠️ <b>Partie complète (2/2)</b> en cours`;
+        pongDot.className = 'status-indicator status-full';
+        pongBtn.textContent = 'SPECTATEUR / COMPLET 🔒';
+      } else if (stats.pongPlayers === 1) {
+        pongStatusText.innerHTML = `🟢 <b>1/2 Joueurs</b> (1 place libre !)`;
+        pongDot.className = 'status-indicator';
+        pongBtn.textContent = 'DÉFIER LE JOUEUR ⚔️';
+      } else {
+        pongStatusText.innerHTML = `🟢 <b>0/2 Joueurs</b> (Mode Solo vs Bot dispo)`;
+        pongDot.className = 'status-indicator';
+        pongBtn.textContent = 'LANCER LE PONG 🏓';
+      }
+    });
+  </script>
 </body>
 </html>
-

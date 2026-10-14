@@ -1,0 +1,54 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Neon Pong 1v1 - Arcade Clash</title>
+  <link rel="stylesheet" href="pong.css">
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+  <div class="pong-wrapper">
+    <div class="pong-top-bar">
+      <a href="/" class="btn-nav-hub">🏠 Retour à l'Arcade</a>
+      <div id="match-status-badge" class="match-status-badge">Connexion au serveur...</div>
+      <button id="btn-toggle-sound" class="btn-nav-hub">🔊 Son</button>
+    </div>
+
+    <!-- Tableau des scores Pong -->
+    <div class="pong-scoreboard">
+      <div class="score-player p1-color">
+        <span id="p1-name" class="player-label">Joueur 1 (Bleu)</span>
+        <span id="p1-score" class="player-score">0</span>
+      </div>
+      <span class="score-divider">VS</span>
+      <div class="score-player p2-color">
+        <span id="p2-score" class="player-score">0</span>
+        <span id="p2-name" class="player-label">🤖 Bot IA</span>
+      </div>
+    </div>
+
+    <!-- Le terrain Pong Canvas -->
+    <div class="canvas-container">
+      <canvas id="pongCanvas" width="900" height="550"></canvas>
+
+      <!-- Overlay Fin de match -->
+      <div id="pong-overlay" class="pong-overlay hidden">
+        <div class="overlay-card">
+          <h2 id="overlay-title" class="overlay-title">VICTOIRE ! 🏆</h2>
+          <p id="overlay-subtitle" class="overlay-subtitle">Le Joueur 1 remporte la manche !</p>
+          <button id="btn-restart" class="btn-restart">REJOUER 🔄</button>
+        </div>
+      </div>
+    </div>
+
+    <!-- Boutons tactiles pour smartphones -->
+    <div class="pong-touch-controls">
+      <button id="btn-touch-up" class="touch-btn">▲ HAUT</button>
+      <button id="btn-touch-down" class="touch-btn">▼ BAS</button>
+    </div>
+  </div>
+
+  <script src="js/pong.js"></script>
+</body>
+</html>
