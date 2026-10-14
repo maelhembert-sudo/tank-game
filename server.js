@@ -8,7 +8,9 @@ const app = express();
 const server = http.createServer(app);
 const io = new Server(server, {
   cors: { origin: '*' },
-  transports: ['websocket', 'polling']
+  transports: ['websocket', 'polling'],
+  pingInterval: 5000, // Vérification battement de cœur toutes les 5s
+  pingTimeout: 7000   // Déconnexion détectée après 7s max si rupture réseau
 });
 
 const PORT = process.env.PORT || 3000;
@@ -360,6 +362,12 @@ function updatePongNamesAndRoles() {
   }
 }
 
+function isSocketActive(socketId) {
+  if (!socketId) return false;
+  const s = io.sockets.sockets.get(socketId);
+  return !!(s && s.connected);
+}
+
 function handlePongDisconnect(socketId) {
   let changed = false;
 
@@ -369,30 +377,38 @@ function handlePongDisconnect(socketId) {
 
   if (socketId === pongRooms.p1) {
     changed = true;
-    if (pongRooms.p2) {
+    if (pongRooms.p2 && isSocketActive(pongRooms.p2)) {
+      // P2 devient P1
       pongRooms.p1 = pongRooms.p2;
       pongRooms.p2 = null;
       io.to(pongRooms.p1).emit('pong_role', { role: 'p1' });
 
-      if (pongRooms.spectators.size > 0) {
-        const nextUser = pongRooms.spectators.values().next().value;
+      // Si un spectateur actif attend, il devient P2
+      for (const nextUser of Array.from(pongRooms.spectators)) {
         pongRooms.spectators.delete(nextUser);
-        pongRooms.p2 = nextUser;
-        io.to(nextUser).emit('pong_role', { role: 'p2' });
+        if (isSocketActive(nextUser)) {
+          pongRooms.p2 = nextUser;
+          io.to(nextUser).emit('pong_role', { role: 'p2' });
+          break;
+        }
       }
     } else {
       pongRooms.p1 = null;
+      pongRooms.p2 = null;
       resetPongMatch();
     }
   } else if (socketId === pongRooms.p2) {
     changed = true;
     pongRooms.p2 = null;
 
-    if (pongRooms.spectators.size > 0) {
-      const nextUser = pongRooms.spectators.values().next().value;
+    // Si un spectateur actif attend, il devient P2
+    for (const nextUser of Array.from(pongRooms.spectators)) {
       pongRooms.spectators.delete(nextUser);
-      pongRooms.p2 = nextUser;
-      io.to(nextUser).emit('pong_role', { role: 'p2' });
+      if (isSocketActive(nextUser)) {
+        pongRooms.p2 = nextUser;
+        io.to(nextUser).emit('pong_role', { role: 'p2' });
+        break;
+      }
     }
   } else if (pongRooms.spectators.has(socketId)) {
     pongRooms.spectators.delete(socketId);
@@ -403,6 +419,31 @@ function handlePongDisconnect(socketId) {
   if (changed) {
     broadcastHubStats();
   }
+}
+
+function cleanPongRooms() {
+  let changed = false;
+
+  if (pongRooms.p1 && !isSocketActive(pongRooms.p1)) {
+    handlePongDisconnect(pongRooms.p1);
+    changed = true;
+  }
+  if (pongRooms.p2 && !isSocketActive(pongRooms.p2)) {
+    handlePongDisconnect(pongRooms.p2);
+    changed = true;
+  }
+
+  for (const specId of Array.from(pongRooms.spectators)) {
+    if (!isSocketActive(specId)) {
+      pongRooms.spectators.delete(specId);
+      changed = true;
+    }
+  }
+
+  if (changed) {
+    updatePongNamesAndRoles();
+  }
+  return changed;
 }
 
 function updatePongPhysics() {
@@ -526,17 +567,32 @@ function updatePongPhysics() {
   }
 }
 
-// ==========================================
-// STATISTIQUES DU HUB EN DIRECT
-// ==========================================
+function cleanTankPlayers() {
+  let changed = false;
+  for (const id in gameState.players) {
+    const p = gameState.players[id];
+    if (p.isBot) continue;
+    if (!isSocketActive(id)) {
+      delete gameState.players[id];
+      changed = true;
+    }
+  }
+  if (changed) {
+    manageBots();
+  }
+  return changed;
+}
+
 function getActiveTankPlayersCount() {
+  cleanTankPlayers();
   return Object.values(gameState.players).filter(p => !p.isBot).length;
 }
 
 function getActivePongPlayersCount() {
+  cleanPongRooms();
   let count = 0;
-  if (pongRooms.p1) count++;
-  if (pongRooms.p2) count++;
+  if (pongRooms.p1 && isSocketActive(pongRooms.p1)) count++;
+  if (pongRooms.p2 && isSocketActive(pongRooms.p2)) count++;
   return count;
 }
 
@@ -635,11 +691,30 @@ io.on('connection', (socket) => {
     }
   });
 
+  socket.on('leave_game', () => {
+    if (gameState.players[socket.id]) {
+      const name = gameState.players[socket.id].name;
+      delete gameState.players[socket.id];
+      io.emit('chat_message', {
+        sender: 'Serveur',
+        text: `${name} a quitté l'arène.`,
+        color: '#f87171'
+      });
+      manageBots();
+      broadcastHubStats();
+    }
+  });
+
   // --- Événements Neon Pong 1v1 ---
   socket.on('pong_join', () => {
+    cleanPongRooms();
     socket.join('pong_room');
 
-    if (!pongRooms.p1) {
+    if (pongRooms.p1 === socket.id) {
+      socket.emit('pong_role', { role: 'p1' });
+    } else if (pongRooms.p2 === socket.id) {
+      socket.emit('pong_role', { role: 'p2' });
+    } else if (!pongRooms.p1) {
       pongRooms.p1 = socket.id;
       socket.emit('pong_role', { role: 'p1' });
     } else if (!pongRooms.p2) {
@@ -652,6 +727,12 @@ io.on('connection', (socket) => {
 
     updatePongNamesAndRoles();
     socket.emit('pong_state', pongState);
+    broadcastHubStats();
+  });
+
+  socket.on('pong_leave', () => {
+    handlePongDisconnect(socket.id);
+    socket.leave('pong_room');
     broadcastHubStats();
   });
 

@@ -845,3 +845,17 @@ function drawParticles() {
   }
 }
 
+// Quitter proprement la session Tank Clash
+function leaveTankGame() {
+  try {
+    socket.emit('leave_game');
+    socket.disconnect();
+  } catch (err) {}
+}
+
+document.querySelectorAll('a[href="/"]').forEach(link => {
+  link.addEventListener('click', leaveTankGame);
+});
+window.addEventListener('pagehide', leaveTankGame);
+window.addEventListener('beforeunload', leaveTankGame);
+

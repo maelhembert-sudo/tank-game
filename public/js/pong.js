@@ -106,6 +106,24 @@ btnToggleSound.addEventListener('click', () => {
   btnToggleSound.textContent = soundEnabled ? '🔊 Son' : '🔇 Muet';
 });
 
+// Quitter proprement la session Pong
+function leavePong() {
+  try {
+    socket.emit('pong_leave');
+    socket.disconnect();
+  } catch (e) {}
+}
+
+const btnHubNav = document.querySelector('a.btn-nav-hub');
+if (btnHubNav) {
+  btnHubNav.addEventListener('click', () => {
+    leavePong();
+  });
+}
+
+window.addEventListener('pagehide', leavePong);
+window.addEventListener('beforeunload', leavePong);
+
 // Audio Web Audio API
 let audioCtx = null;
 function initAudio() {
@@ -290,3 +308,4 @@ function renderPong() {
   ctx.restore();
 }
 requestAnimationFrame(renderPong);
+
