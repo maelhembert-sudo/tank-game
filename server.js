@@ -140,6 +140,158 @@ function getSafeSpawn() {
 // Palette de couleurs pour les tanks
 const TANK_COLORS = ['#e52d27', '#00b4d8', '#2ec4b6', '#ff9f1c', '#9d4edd', '#ff006e', '#80ed99'];
 
+// Configuration des Bots IA pour jeu solo
+const BOTS_CONFIG = [
+  { id: 'bot_1', name: '🤖 Terminator', color: '#ff9f1c' },
+  { id: 'bot_2', name: '🤖 Hunter', color: '#9d4edd' }
+];
+
+function manageBots() {
+  const humanPlayers = Object.values(gameState.players).filter(p => !p.isBot);
+
+  // S'il n'y a qu'1 seul joueur humain, on déploie 2 bots pour l'affronter
+  if (humanPlayers.length === 1) {
+    BOTS_CONFIG.forEach(cfg => {
+      if (!gameState.players[cfg.id]) {
+        const spawn = getSafeSpawn();
+        gameState.players[cfg.id] = {
+          id: cfg.id,
+          isBot: true,
+          name: cfg.name,
+          color: cfg.color,
+          x: spawn.x,
+          y: spawn.y,
+          bodyAngle: Math.random() * Math.PI * 2,
+          turretAngle: 0,
+          radius: 24,
+          width: 44,
+          height: 36,
+          health: 100,
+          maxHealth: 100,
+          isAlive: true,
+          kills: 0,
+          deaths: 0,
+          score: 0,
+          shield: Date.now() + 2500,
+          shieldHits: 0,
+          shieldExpiresAt: 0,
+          speedMultiplier: 0.82, // Vitesse équilibrée pour un combat dynamique et amusant
+          rapidFireUntil: 0,
+          tripleShotUntil: 0,
+          lastShotTime: 0,
+          inputs: { forward: false, backward: false, left: false, right: false, shoot: false },
+          ai: {
+            reverseCooldown: 0,
+            preferredDistance: 240 + Math.random() * 80
+          }
+        };
+        io.emit('chat_message', {
+          sender: 'Système',
+          text: `${cfg.name} entre dans l'arène pour vous défier !`,
+          color: '#38bdf8'
+        });
+      }
+    });
+  } else if (humanPlayers.length === 0 || humanPlayers.length >= 2) {
+    // Si aucun humain (serveur au repos) ou s'il y a plusieurs vrais joueurs, on retire les bots
+    BOTS_CONFIG.forEach(cfg => {
+      if (gameState.players[cfg.id]) {
+        delete gameState.players[cfg.id];
+        io.emit('chat_message', {
+          sender: 'Système',
+          text: `${cfg.name} quitte l'arène pour laisser place aux joueurs !`,
+          color: '#94a3b8'
+        });
+      }
+    });
+  }
+}
+
+function updateBotAI(bot, now) {
+  // Trouver la cible la plus proche (priorité absolue aux joueurs humains)
+  let nearestTarget = null;
+  let minDist = Infinity;
+
+  for (const id in gameState.players) {
+    const target = gameState.players[id];
+    if (target.id === bot.id || !target.isAlive) continue;
+    const d = Math.hypot(target.x - bot.x, target.y - bot.y);
+    const scoreWeight = target.isBot ? 1.6 : 1.0;
+    if (d * scoreWeight < minDist) {
+      minDist = d * scoreWeight;
+      nearestTarget = target;
+    }
+  }
+
+  if (!nearestTarget) {
+    bot.inputs.forward = false;
+    bot.inputs.backward = false;
+    bot.inputs.left = false;
+    bot.inputs.right = false;
+    bot.inputs.shoot = false;
+    return;
+  }
+
+  const angleToTarget = Math.atan2(nearestTarget.y - bot.y, nearestTarget.x - bot.x);
+  let diff = (angleToTarget - bot.bodyAngle) % (Math.PI * 2);
+  if (diff < -Math.PI) diff += Math.PI * 2;
+  if (diff > Math.PI) diff -= Math.PI * 2;
+
+  // Détection d'obstacles devant le bot (évitement des murs)
+  const probeDist = 55;
+  const probeX = bot.x + Math.cos(bot.bodyAngle) * probeDist;
+  const probeY = bot.y + Math.sin(bot.bodyAngle) * probeDist;
+  let wallAhead = false;
+  for (let i = 0; i < WALLS.length; i++) {
+    if (checkRectCircle(WALLS[i], probeX, probeY, bot.radius)) {
+      wallAhead = true;
+      break;
+    }
+  }
+
+  if (wallAhead) {
+    bot.ai.reverseCooldown = 22; // Reculer pendant 22 ticks
+  }
+
+  if (bot.ai.reverseCooldown > 0) {
+    bot.ai.reverseCooldown--;
+    bot.inputs.forward = false;
+    bot.inputs.backward = true;
+    bot.inputs.left = false;
+    bot.inputs.right = true; // Tourner pour dégager l'angle
+  } else {
+    bot.inputs.backward = false;
+
+    // Rotation fluide vers la cible
+    if (Math.abs(diff) > 0.08) {
+      bot.inputs.left = diff < 0;
+      bot.inputs.right = diff > 0;
+    } else {
+      bot.inputs.left = false;
+      bot.inputs.right = false;
+    }
+
+    // Distance d'engagement tactique
+    const targetDist = Math.hypot(nearestTarget.x - bot.x, nearestTarget.y - bot.y);
+    if (targetDist > bot.ai.preferredDistance) {
+      bot.inputs.forward = true;
+    } else if (targetDist < 140) {
+      bot.inputs.backward = true;
+    } else {
+      bot.inputs.forward = false;
+    }
+  }
+
+  // Décision de tir (aligné vers la cible et à bonne portée)
+  const realDist = Math.hypot(nearestTarget.x - bot.x, nearestTarget.y - bot.y);
+  if (Math.abs(diff) < 0.22 && realDist < 600 && bot.ai.reverseCooldown === 0) {
+    bot.inputs.shoot = true;
+    attemptShoot(bot);
+  } else {
+    bot.inputs.shoot = false;
+  }
+}
+
 io.on('connection', (socket) => {
   console.log(`[+] Joueur connecté: ${socket.id}`);
 
@@ -195,6 +347,7 @@ io.on('connection', (socket) => {
       text: `${gameState.players[socket.id].name} a rejoint la bataille !`,
       color: '#4ade80'
     });
+    manageBots();
   });
 
   socket.on('player_input', (inputData) => {
@@ -219,6 +372,7 @@ io.on('connection', (socket) => {
         text: `${name} a quitté l'arène.`,
         color: '#f87171'
       });
+      manageBots();
     }
     console.log(`[-] Joueur déconnecté: ${socket.id}`);
   });
@@ -317,8 +471,24 @@ setInterval(() => {
   gameState.explosions = [];
 }, 1000 / 35);
 
+let botCheckTimer = 0;
+
 function updateGamePhysics() {
   const now = Date.now();
+
+  // Vérifier et actualiser les bots toutes les 60 ticks (~1 seconde)
+  if (++botCheckTimer >= 60) {
+    botCheckTimer = 0;
+    manageBots();
+  }
+
+  // Mettre à jour l'IA des bots actifs
+  for (const id in gameState.players) {
+    const p = gameState.players[id];
+    if (p.isBot && p.isAlive) {
+      updateBotAI(p, now);
+    }
+  }
 
   // 1. Déplacement des Tanks
   for (const id in gameState.players) {
