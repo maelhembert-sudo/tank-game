@@ -1,0 +1,335 @@
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+  user-select: none;
+  -webkit-user-select: none;
+  touch-action: none;
+}
+
+body, html {
+  width: 100%;
+  height: 100%;
+  overflow: hidden;
+  background-color: #07090e;
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+  color: #f0f6fc;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+}
+
+.brick-wrapper {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  max-width: 800px;
+  width: 100%;
+  padding: 10px;
+}
+
+/* Barre Supérieure */
+.brick-top-bar {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 8px;
+  padding: 0 6px;
+}
+
+.btn-nav-hub {
+  background: rgba(22, 27, 34, 0.85);
+  border: 1px solid #30363d;
+  color: #c9d1d9;
+  text-decoration: none;
+  padding: 8px 14px;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+  transition: background 0.15s, border-color 0.15s;
+}
+
+.btn-nav-hub:hover {
+  background: #21262d;
+  border-color: #f59e0b;
+  color: #fff;
+}
+
+.match-badge {
+  background: rgba(13, 17, 23, 0.9);
+  border: 1px solid rgba(245, 158, 11, 0.4);
+  padding: 6px 16px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #f59e0b;
+  letter-spacing: 0.5px;
+}
+
+/* Tableau de Duel */
+.duel-scoreboard {
+  width: 100%;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  background: rgba(22, 27, 34, 0.7);
+  border: 1px solid rgba(48, 54, 61, 0.6);
+  border-radius: 12px;
+  padding: 8px 16px;
+  margin-bottom: 10px;
+}
+
+.score-box {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 180px;
+}
+
+.player-box {
+  align-items: flex-start;
+}
+
+.rival-box {
+  align-items: flex-end;
+}
+
+.player-header {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.player-label {
+  font-size: 14px;
+  font-weight: 700;
+  color: #f59e0b;
+}
+
+.rival-box .player-label {
+  color: #00d2ff;
+}
+
+.player-lives {
+  font-size: 13px;
+  letter-spacing: 2px;
+}
+
+.score-details {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+.score-value {
+  font-size: 24px;
+  font-weight: 900;
+  color: #fff;
+  letter-spacing: 1px;
+}
+
+.combo-pill {
+  background: rgba(245, 158, 11, 0.2);
+  border: 1px solid rgba(245, 158, 11, 0.5);
+  color: #f59e0b;
+  font-size: 11px;
+  font-weight: 800;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.rival-bricks-badge {
+  background: rgba(0, 210, 255, 0.15);
+  border: 1px solid rgba(0, 210, 255, 0.4);
+  color: #00d2ff;
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: 10px;
+}
+
+.vs-divider {
+  font-size: 14px;
+  font-weight: 900;
+  color: #484f58;
+  letter-spacing: 1px;
+}
+
+/* Canvas Terrain */
+.canvas-container {
+  position: relative;
+  width: 100%;
+  max-width: 750px;
+  aspect-ratio: 750 / 600;
+  background: #090d14;
+  border: 2px solid rgba(245, 158, 11, 0.35);
+  border-radius: 12px;
+  overflow: hidden;
+  box-shadow: 0 10px 40px rgba(0, 0, 0, 0.8), 0 0 25px rgba(245, 158, 11, 0.15);
+}
+
+#brickCanvas {
+  width: 100%;
+  height: 100%;
+  display: block;
+}
+
+.start-prompt {
+  position: absolute;
+  bottom: 80px;
+  left: 0;
+  width: 100%;
+  text-align: center;
+  pointer-events: none;
+  animation: pulsePrompt 1.4s infinite;
+}
+
+.start-prompt span {
+  background: rgba(13, 17, 23, 0.9);
+  border: 1px solid #f59e0b;
+  color: #f59e0b;
+  padding: 8px 18px;
+  border-radius: 20px;
+  font-size: 13px;
+  font-weight: 700;
+}
+
+@keyframes pulsePrompt {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.5; transform: scale(0.97); }
+}
+
+/* Overlay Fin de match */
+.game-overlay {
+  position: absolute;
+  top: 0;
+  left: 0;
+  width: 100%;
+  height: 100%;
+  background: rgba(6, 9, 14, 0.88);
+  backdrop-filter: blur(6px);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 50;
+  padding: 20px;
+}
+
+.overlay-card {
+  background: #161b22;
+  border: 2px solid #f59e0b;
+  border-radius: 16px;
+  padding: 28px 36px;
+  text-align: center;
+  max-width: 400px;
+  width: 100%;
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.8), 0 0 25px rgba(245, 158, 11, 0.3);
+}
+
+.overlay-title {
+  font-size: 30px;
+  font-weight: 900;
+  color: #f59e0b;
+  margin-bottom: 8px;
+}
+
+.overlay-subtitle {
+  color: #8b949e;
+  font-size: 14px;
+  margin-bottom: 16px;
+}
+
+.overlay-stat {
+  background: #0d1117;
+  border: 1px solid #30363d;
+  padding: 10px;
+  border-radius: 8px;
+  font-size: 15px;
+  margin-bottom: 18px;
+}
+
+.overlay-stat b {
+  color: #f59e0b;
+}
+
+.btn-restart {
+  width: 100%;
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  color: #fff;
+  border: none;
+  padding: 12px;
+  border-radius: 8px;
+  font-size: 15px;
+  font-weight: 800;
+  cursor: pointer;
+  margin-bottom: 12px;
+  transition: transform 0.15s, filter 0.15s;
+}
+
+.btn-restart:hover {
+  transform: scale(1.02);
+  filter: brightness(1.15);
+}
+
+.btn-hub-link {
+  color: #8b949e;
+  font-size: 13px;
+  text-decoration: none;
+  transition: color 0.15s;
+}
+
+.btn-hub-link:hover {
+  color: #58a6ff;
+  text-decoration: underline;
+}
+
+/* Instructions */
+.brick-controls-hint {
+  display: flex;
+  justify-content: center;
+  gap: 16px;
+  margin-top: 10px;
+  font-size: 12px;
+  color: #8b949e;
+}
+
+.brick-controls-hint b {
+  color: #c9d1d9;
+}
+
+/* Contrôles tactiles mobile */
+.touch-bar {
+  display: none;
+  width: 100%;
+  margin-top: 10px;
+}
+
+.btn-touch-fire {
+  width: 100%;
+  background: linear-gradient(135deg, #f59e0b, #d97706);
+  border: none;
+  color: #fff;
+  font-size: 16px;
+  font-weight: 800;
+  padding: 14px;
+  border-radius: 10px;
+  cursor: pointer;
+  box-shadow: 0 4px 15px rgba(245, 158, 11, 0.4);
+}
+
+@media (max-width: 650px) {
+  .brick-controls-hint {
+    display: none;
+  }
+  .touch-bar {
+    display: block;
+  }
+}
+
+.hidden {
+  display: none !important;
+}

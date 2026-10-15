@@ -456,3 +456,4 @@ function drawVirus(x, y, radius) {
 }
 
 requestAnimationFrame(renderBlob);
+

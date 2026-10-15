@@ -1,0 +1,82 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+  <title>Brick Blast 1v1 - Arcade Clash</title>
+  <link rel="stylesheet" href="brick.css">
+  <script src="/socket.io/socket.io.js"></script>
+</head>
+<body>
+  <div class="brick-wrapper">
+    <!-- Barre Supérieure -->
+    <div class="brick-top-bar">
+      <a href="/" class="btn-nav-hub" id="btn-hub-exit">🏠 Retour au Hub</a>
+      <div id="match-status-badge" class="match-badge">🎮 Solo vs 🤖 BlastBot</div>
+      <button id="btn-toggle-sound" class="btn-nav-hub">🔊 Son</button>
+    </div>
+
+    <!-- Tableau de Duel en direct -->
+    <div class="duel-scoreboard">
+      <div class="score-box player-box">
+        <div class="player-header">
+          <span id="player-name" class="player-label">Vous</span>
+          <span id="player-lives" class="player-lives">❤️❤️❤️</span>
+        </div>
+        <div class="score-details">
+          <span class="score-value" id="player-score">0</span>
+          <span class="combo-pill" id="player-combo">COMBO x1</span>
+        </div>
+      </div>
+
+      <div class="vs-divider">VS</div>
+
+      <div class="score-box rival-box">
+        <div class="player-header">
+          <span id="rival-lives" class="player-lives">❤️❤️❤️</span>
+          <span id="rival-name" class="player-label">🤖 BlastBot</span>
+        </div>
+        <div class="score-details rival-details">
+          <span class="rival-bricks-badge" id="rival-bricks-left">40 briques</span>
+          <span class="score-value" id="rival-score">0</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Le Terrain de Jeu Canvas -->
+    <div class="canvas-container">
+      <canvas id="brickCanvas" width="750" height="600"></canvas>
+
+      <!-- Écran de Démarrage / Lancement -->
+      <div id="start-prompt" class="start-prompt">
+        <span>Appuyez sur <b>ESPACE</b> ou <b>CLIQUEZ</b> pour lancer la balle !</span>
+      </div>
+
+      <!-- Overlay Fin de Match -->
+      <div id="game-overlay" class="game-overlay hidden">
+        <div class="overlay-card">
+          <h2 id="overlay-title" class="overlay-title">VICTOIRE ! 🏆</h2>
+          <p id="overlay-subtitle" class="overlay-subtitle">Vous avez pulvérisé toutes les briques !</p>
+          <div class="overlay-stat">Score Final : <b id="final-score">0</b></div>
+          <button id="btn-restart" class="btn-restart">REJOUER 🔄</button>
+          <a href="/" class="btn-hub-link">← Retour à l'Arcade</a>
+        </div>
+      </div>
+    </div>
+
+    <!-- Instructions / Raccourcis -->
+    <div class="brick-controls-hint">
+      <span>🖱️ <b>Souris / Doigt</b> : Déplacer le canon</span>
+      <span>⌨️ <b>Flèches / Q-D</b> : Déplacement clavier</span>
+      <span>🚀 <b>Espace / Clic</b> : Lancer la balle / Tirer les lasers</span>
+    </div>
+
+    <!-- Contrôles Tactiles pour Mobile -->
+    <div class="touch-bar">
+      <button id="btn-touch-action" class="btn-touch-fire">🔥 LANCER / LASER</button>
+    </div>
+  </div>
+
+  <script src="js/brick.js"></script>
+</body>
+</html>

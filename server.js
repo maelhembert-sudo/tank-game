@@ -28,6 +28,9 @@ app.get('/pong', (req, res) => {
 app.get('/blob', (req, res) => {
   res.sendFile(path.join(__dirname, 'public', 'blob.html'));
 });
+app.get('/brick', (req, res) => {
+  res.sendFile(path.join(__dirname, 'public', 'brick.html'));
+});
 
 // Dimensions de l'arène de jeu
 const MAP_WIDTH = 1800;
@@ -970,13 +973,155 @@ function updateBlobPhysics() {
   }
 }
 
+// ==========================================
+// CONFIGURATION & GESTION DU JEU BRICK BLAST 1v1
+// ==========================================
+const brickRooms = {
+  p1: null, // Socket ID du Joueur 1
+  p2: null, // Socket ID du Joueur 2
+  spectators: new Set(),
+  data: {
+    p1: { score: 0, lives: 3, bricksLeft: 54 },
+    p2: { score: 0, lives: 3, bricksLeft: 54, isBot: true }
+  }
+};
+
+let brickBotSimulationInterval = null;
+
+function resetBrickBot() {
+  brickRooms.data.p2 = {
+    score: 0,
+    lives: 3,
+    bricksLeft: 54,
+    isBot: true
+  };
+}
+
+// Simulation du bot IA pour Brick Blast en solo
+function startBrickBotSimulation() {
+  if (brickBotSimulationInterval) return;
+
+  brickBotSimulationInterval = setInterval(() => {
+    if (!brickRooms.p1 || brickRooms.p2) {
+      if (brickBotSimulationInterval) {
+        clearInterval(brickBotSimulationInterval);
+        brickBotSimulationInterval = null;
+      }
+      return;
+    }
+
+    const bot = brickRooms.data.p2;
+    if (bot.bricksLeft > 0 && bot.lives > 0) {
+      const destroyed = Math.random() > 0.4 ? 2 : 1;
+      bot.bricksLeft = Math.max(0, bot.bricksLeft - destroyed);
+      bot.score += destroyed * (100 + Math.floor(Math.random() * 150));
+
+      if (Math.random() < 0.05 && bot.lives > 1) {
+        bot.lives--;
+      }
+
+      if (brickRooms.p1) {
+        io.to(brickRooms.p1).emit('brick_rival_update', {
+          name: '🤖 BlastBot',
+          score: bot.score,
+          lives: bot.lives,
+          bricksLeft: bot.bricksLeft,
+          isWinner: bot.bricksLeft === 0
+        });
+      }
+    }
+  }, 2200);
+}
+
+function handleBrickDisconnect(socketId) {
+  let changed = false;
+
+  if (socketId === brickRooms.p1) {
+    changed = true;
+    if (brickRooms.p2 && isSocketActive(brickRooms.p2)) {
+      brickRooms.p1 = brickRooms.p2;
+      brickRooms.p2 = null;
+      io.to(brickRooms.p1).emit('brick_role', { role: 'p1', isDuel: false, rivalName: '🤖 BlastBot' });
+
+      for (const nextUser of Array.from(brickRooms.spectators)) {
+        brickRooms.spectators.delete(nextUser);
+        if (isSocketActive(nextUser)) {
+          brickRooms.p2 = nextUser;
+          io.to(nextUser).emit('brick_role', { role: 'p2', isDuel: true, rivalName: 'Joueur 1' });
+          io.to(brickRooms.p1).emit('brick_role', { role: 'p1', isDuel: true, rivalName: 'Joueur 2' });
+          break;
+        }
+      }
+    } else {
+      brickRooms.p1 = null;
+      brickRooms.p2 = null;
+      resetBrickBot();
+    }
+  } else if (socketId === brickRooms.p2) {
+    changed = true;
+    brickRooms.p2 = null;
+
+    let promoted = false;
+    for (const nextUser of Array.from(brickRooms.spectators)) {
+      brickRooms.spectators.delete(nextUser);
+      if (isSocketActive(nextUser)) {
+        brickRooms.p2 = nextUser;
+        io.to(nextUser).emit('brick_role', { role: 'p2', isDuel: true, rivalName: 'Joueur 1' });
+        promoted = true;
+        break;
+      }
+    }
+
+    if (!promoted && brickRooms.p1) {
+      resetBrickBot();
+      io.to(brickRooms.p1).emit('brick_role', { role: 'p1', isDuel: false, rivalName: '🤖 BlastBot' });
+      startBrickBotSimulation();
+    }
+  } else if (brickRooms.spectators.has(socketId)) {
+    brickRooms.spectators.delete(socketId);
+    changed = true;
+  }
+
+  if (changed) {
+    broadcastHubStats();
+  }
+}
+
+function cleanBrickRooms() {
+  let changed = false;
+  if (brickRooms.p1 && !isSocketActive(brickRooms.p1)) {
+    handleBrickDisconnect(brickRooms.p1);
+    changed = true;
+  }
+  if (brickRooms.p2 && !isSocketActive(brickRooms.p2)) {
+    handleBrickDisconnect(brickRooms.p2);
+    changed = true;
+  }
+  for (const specId of Array.from(brickRooms.spectators)) {
+    if (!isSocketActive(specId)) {
+      brickRooms.spectators.delete(specId);
+      changed = true;
+    }
+  }
+  return changed;
+}
+
+function getActiveBrickPlayersCount() {
+  cleanBrickRooms();
+  let count = 0;
+  if (brickRooms.p1 && isSocketActive(brickRooms.p1)) count++;
+  if (brickRooms.p2 && isSocketActive(brickRooms.p2)) count++;
+  return count;
+}
+
 function getHubStats() {
   const total = io.engine ? io.engine.clientsCount : (io.sockets?.sockets?.size || 0);
   return {
     totalOnline: total,
     tankPlayers: getActiveTankPlayersCount(),
     pongPlayers: getActivePongPlayersCount(),
-    blobPlayers: getActiveBlobPlayersCount()
+    blobPlayers: getActiveBlobPlayersCount(),
+    brickPlayers: getActiveBrickPlayersCount()
   };
 }
 
@@ -1247,6 +1392,64 @@ io.on('connection', (socket) => {
     broadcastHubStats();
   });
 
+  // --- Événements Brick Blast 1v1 ---
+  socket.on('brick_join', () => {
+    cleanBrickRooms();
+    socket.join('brick_room');
+
+    if (!brickRooms.p1) {
+      brickRooms.p1 = socket.id;
+      resetBrickBot();
+      socket.emit('brick_role', { role: 'p1', isDuel: false, rivalName: '🤖 BlastBot' });
+      startBrickBotSimulation();
+    } else if (!brickRooms.p2) {
+      brickRooms.p2 = socket.id;
+      socket.emit('brick_role', { role: 'p2', isDuel: true, rivalName: 'Joueur 1' });
+      io.to(brickRooms.p1).emit('brick_role', { role: 'p1', isDuel: true, rivalName: 'Joueur 2' });
+    } else {
+      brickRooms.spectators.add(socket.id);
+      socket.emit('brick_role', { role: 'spectator', isDuel: true, rivalName: 'Match 1v1 en cours' });
+    }
+
+    broadcastHubStats();
+  });
+
+  socket.on('brick_progress', (data) => {
+    if (socket.id === brickRooms.p1 && brickRooms.p2) {
+      io.to(brickRooms.p2).emit('brick_rival_update', {
+        name: 'Joueur 1',
+        score: data.score,
+        lives: data.lives,
+        bricksLeft: data.bricksLeft,
+        isWinner: data.bricksLeft === 0
+      });
+    } else if (socket.id === brickRooms.p2 && brickRooms.p1) {
+      io.to(brickRooms.p1).emit('brick_rival_update', {
+        name: 'Joueur 2',
+        score: data.score,
+        lives: data.lives,
+        bricksLeft: data.bricksLeft,
+        isWinner: data.bricksLeft === 0
+      });
+    }
+  });
+
+  socket.on('brick_game_over', (data) => {
+    const rival = socket.id === brickRooms.p1 ? brickRooms.p2 : brickRooms.p1;
+    if (rival) {
+      io.to(rival).emit('brick_rival_update', {
+        name: socket.id === brickRooms.p1 ? 'Joueur 1' : 'Joueur 2',
+        isWinner: !data.won
+      });
+    }
+  });
+
+  socket.on('brick_leave', () => {
+    handleBrickDisconnect(socket.id);
+    socket.leave('brick_room');
+    broadcastHubStats();
+  });
+
   // --- Déconnexion ---
   socket.on('disconnect', () => {
     if (gameState.players[socket.id]) {
@@ -1260,6 +1463,7 @@ io.on('connection', (socket) => {
       manageBots();
     }
     handlePongDisconnect(socket.id);
+    handleBrickDisconnect(socket.id);
     if (blobState.players[socket.id]) {
       delete blobState.players[socket.id];
     }
