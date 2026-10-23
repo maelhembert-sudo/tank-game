@@ -848,3 +848,4 @@ function render() {
 
 initGame();
 requestAnimationFrame(render);
+

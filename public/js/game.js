@@ -11,7 +11,12 @@ let players = {};
 let bullets = [];
 let powerups = [];
 let particles = [];
+let floatingTexts = [];
 let soundEnabled = true;
+let screenShake = 0;
+
+// Mode de pilotage : 'fluid' (recommandé : ZQSD directionnel + visée souris 360°) ou 'classic' (mode tank rétro)
+let currentControlMode = 'fluid';
 
 // Entrées utilisateur
 const inputState = {
@@ -19,13 +24,16 @@ const inputState = {
   backward: false,
   left: false,
   right: false,
+  up: false,
+  down: false,
   turretAngle: 0,
-  shoot: false
+  shoot: false,
+  controlMode: 'fluid'
 };
 
-// Caméra du joueur
+// Caméra du joueur et position du curseur
 const camera = { x: 0, y: 0 };
-let mouseScreenPos = { x: 0, y: 0 };
+let mouseScreenPos = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
 
 // Éléments du DOM
 const lobbyScreen = document.getElementById('lobby-screen');
@@ -44,6 +52,9 @@ const leaderboardList = document.getElementById('leaderboard-list');
 const killFeed = document.getElementById('kill-feed');
 const btnToggleSound = document.getElementById('btn-toggle-sound');
 const lanUrlText = document.getElementById('lan-url-text');
+const btnModeFluid = document.getElementById('btn-mode-fluid');
+const btnModeClassic = document.getElementById('btn-mode-classic');
+const modeHint = document.getElementById('mode-hint');
 
 let selectedColor = '#e52d27';
 
@@ -63,6 +74,27 @@ colorButtons.forEach(btn => {
     selectedColor = btn.dataset.color;
   });
 });
+
+// Sélecteur de mode de pilotage dans le lobby
+if (btnModeFluid && btnModeClassic) {
+  btnModeFluid.addEventListener('click', () => {
+    currentControlMode = 'fluid';
+    inputState.controlMode = 'fluid';
+    btnModeFluid.classList.add('active');
+    btnModeClassic.classList.remove('active');
+    if (modeHint) modeHint.textContent = '✨ Recommandé : pilotez avec ZQSD et visez à 360° avec la souris !';
+    sendInputs();
+  });
+
+  btnModeClassic.addEventListener('click', () => {
+    currentControlMode = 'classic';
+    inputState.controlMode = 'classic';
+    btnModeClassic.classList.add('active');
+    btnModeFluid.classList.remove('active');
+    if (modeHint) modeHint.textContent = '🚜 Style rétro : Z pour avancer, Q/D pour faire pivoter le châssis.';
+    sendInputs();
+  });
+}
 
 // Détection de l'adresse du serveur pour le message LAN
 if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
@@ -103,7 +135,7 @@ socket.on('joined', (data) => {
   myId = data.id;
 });
 
-// Fonctions de lissage et d'interpolation (LERP) pour éliminer les saccades réseau
+// Fonctions de lissage et d'interpolation (LERP)
 function lerp(a, b, t) {
   return a + (b - a) * t;
 }
@@ -123,7 +155,24 @@ function checkRectCircle(rect, cx, cy, radius) {
   return (dx * dx + dy * dy) < (radius * radius);
 }
 
-// Réception de l'état du jeu (60 Hz parfaitement synchronisé)
+// Textes flottants (Dégâts, Soins, Kills)
+function addFloatingText(text, x, y, color = '#ffffff', fontSize = 16) {
+  floatingTexts.push({
+    text,
+    x,
+    y,
+    color,
+    fontSize,
+    life: 1.0,
+    vy: -1.3
+  });
+}
+
+function addScreenShake(amount) {
+  screenShake = Math.max(screenShake, amount);
+}
+
+// Réception de l'état du jeu (synchronisé par le serveur)
 socket.on('game_state', (state) => {
   const activeIds = new Set();
 
@@ -138,16 +187,37 @@ socket.on('game_state', (state) => {
         x: sp.x,
         y: sp.y,
         bodyAngle: sp.bodyAngle,
+        turretAngle: sp.turretAngle !== undefined ? sp.turretAngle : sp.bodyAngle,
         targetX: sp.x,
         targetY: sp.y,
-        targetAngle: sp.bodyAngle
+        targetAngle: sp.bodyAngle,
+        targetTurretAngle: sp.turretAngle !== undefined ? sp.turretAngle : sp.bodyAngle,
+        prevHealth: sp.health
       };
     } else {
       const p = players[id];
+
+      // Détection de variation de PV pour retours visuels percutants
+      if (p.prevHealth !== undefined && p.isAlive && sp.isAlive) {
+        const diff = sp.health - p.prevHealth;
+        if (diff < -2) {
+          // Dégâts subis !
+          addFloatingText(`${Math.round(diff)}`, sp.x, sp.y - 25, '#ef4444', 18);
+          if (id === myId) {
+            addScreenShake(8);
+          }
+        } else if (diff > 5) {
+          // Soin reçu !
+          addFloatingText(`+${Math.round(diff)} PV`, sp.x, sp.y - 25, '#34d399', 18);
+        }
+      }
+      p.prevHealth = sp.health;
+
       Object.assign(p, sp);
       p.targetX = sp.x;
       p.targetY = sp.y;
       p.targetAngle = sp.bodyAngle;
+      p.targetTurretAngle = sp.turretAngle !== undefined ? sp.turretAngle : sp.bodyAngle;
 
       // Téléportation uniquement en cas de respawn (distance > 250px)
       const dist = Math.hypot(p.targetX - p.x, p.targetY - p.y);
@@ -155,6 +225,7 @@ socket.on('game_state', (state) => {
         p.x = p.targetX;
         p.y = p.targetY;
         p.bodyAngle = p.targetAngle;
+        p.turretAngle = p.targetTurretAngle;
       }
     }
   }
@@ -185,7 +256,7 @@ socket.on('sound_event', (evt) => {
   playSound(evt.type);
 });
 
-// Messages de kill / chat
+// Messages de kill / chat / bonus
 socket.on('chat_message', (msg) => {
   addKillFeedMessage(msg.text, msg.color);
 });
@@ -208,12 +279,14 @@ function updateHUD() {
   const me = players[myId];
   if (!me) return;
 
-  // Santé
-  const hpPercent = Math.max(0, (me.health / me.maxHealth) * 100);
-  hudHealthFill.style.width = `${hpPercent}%`;
-  hudHealthText.textContent = `${Math.max(0, Math.ceil(me.health))} / ${me.maxHealth}`;
+  const maxHp = me.maxHealth || 150;
+  const currentHp = Math.max(0, Math.ceil(me.health));
+  const hpPercent = Math.max(0, (currentHp / maxHp) * 100);
 
-  // Buffs
+  hudHealthFill.style.width = `${hpPercent}%`;
+  hudHealthText.textContent = `${currentHp} / ${maxHp}`;
+
+  // Buffs actifs
   const now = Date.now();
   let buffHtml = '';
   if (me.hasShield || (me.shieldTime && now < me.shieldTime)) {
@@ -226,7 +299,7 @@ function updateHUD() {
     buffHtml += `<span class="buff-pill" style="background:#ff007f;">💥 Triple Tir (${Math.ceil((me.tripleShotUntil - now)/1000)}s)</span>`;
   }
   if (me.speedMultiplier > 1.0) {
-    buffHtml += `<span class="buff-pill" style="background:#38ef7d;">💨 Vitesse</span>`;
+    buffHtml += `<span class="buff-pill" style="background:#38ef7d;">💨 Vitesse Boostée</span>`;
   }
   hudBuffs.innerHTML = buffHtml;
 
@@ -269,12 +342,11 @@ function playSound(type) {
   const now = audioCtx.currentTime;
 
   if (type === 'shoot') {
-    // Son de tir (coup de canon avec chute de fréquence)
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.type = 'sawtooth';
-    osc.frequency.setValueAtTime(220, now);
-    osc.frequency.exponentialRampToValueAtTime(40, now + 0.12);
+    osc.frequency.setValueAtTime(240, now);
+    osc.frequency.exponentialRampToValueAtTime(45, now + 0.12);
     gain.gain.setValueAtTime(0.25, now);
     gain.gain.exponentialRampToValueAtTime(0.01, now + 0.12);
     osc.connect(gain);
@@ -282,7 +354,6 @@ function playSound(type) {
     osc.start(now);
     osc.stop(now + 0.13);
   } else if (type === 'ricochet') {
-    // Ricochet métallique aigu
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.type = 'sine';
@@ -295,7 +366,6 @@ function playSound(type) {
     osc.start(now);
     osc.stop(now + 0.1);
   } else if (type === 'hit') {
-    // Impact sur blindage
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.type = 'triangle';
@@ -308,7 +378,6 @@ function playSound(type) {
     osc.start(now);
     osc.stop(now + 0.19);
   } else if (type === 'tank_destroyed') {
-    // Explosion massive avec bruit blanc
     const bufferSize = audioCtx.sampleRate * 0.5;
     const buffer = audioCtx.createBuffer(1, bufferSize, audioCtx.sampleRate);
     const data = buffer.getChannelData(0);
@@ -329,7 +398,6 @@ function playSound(type) {
     gain.connect(audioCtx.destination);
     noise.start(now);
   } else if (type === 'shield_broken') {
-    // Son d'explosion / éclatement de bouclier
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.type = 'triangle';
@@ -341,8 +409,36 @@ function playSound(type) {
     gain.connect(audioCtx.destination);
     osc.start(now);
     osc.stop(now + 0.27);
+  } else if (type === 'heal') {
+    // Accord mélodique ascendant lumineux pour le kit de soin
+    const notes = [523.25, 659.25, 783.99, 1046.50]; // Do, Mi, Sol, Do
+    notes.forEach((freq, idx) => {
+      const osc = audioCtx.createOscillator();
+      const gain = audioCtx.createGain();
+      const start = now + idx * 0.08;
+      osc.type = 'sine';
+      osc.frequency.setValueAtTime(freq, start);
+      gain.gain.setValueAtTime(0.2, start);
+      gain.gain.exponentialRampToValueAtTime(0.005, start + 0.22);
+      osc.connect(gain);
+      gain.connect(audioCtx.destination);
+      osc.start(start);
+      osc.stop(start + 0.24);
+    });
+  } else if (type === 'health_spawn') {
+    // Ping sonore d'annonce de largage de kit de soin
+    const osc = audioCtx.createOscillator();
+    const gain = audioCtx.createGain();
+    osc.type = 'sine';
+    osc.frequency.setValueAtTime(880, now);
+    osc.frequency.exponentialRampToValueAtTime(1320, now + 0.25);
+    gain.gain.setValueAtTime(0.18, now);
+    gain.gain.exponentialRampToValueAtTime(0.01, now + 0.28);
+    osc.connect(gain);
+    gain.connect(audioCtx.destination);
+    osc.start(now);
+    osc.stop(now + 0.29);
   } else if (type === 'powerup') {
-    // Carillon de powerup montant
     const notes = [440, 554, 659, 880];
     notes.forEach((freq, idx) => {
       const osc = audioCtx.createOscillator();
@@ -361,10 +457,13 @@ function playSound(type) {
 
 // Gestion des Particules
 function createExplosionParticles(x, y, radius, type) {
-  const count = type === 'tank' ? 45 : (type === 'shield_break' ? 28 : 16);
-  const colors = type === 'shield_break'
-    ? ['#00f0ff', '#ffffff', '#00b4d8', '#caf0f8']
-    : ['#ff4b2b', '#ff416c', '#ffb300', '#ffffff'];
+  const isHeal = type === 'heal';
+  const count = type === 'tank' ? 45 : (type === 'shield_break' ? 28 : (isHeal ? 25 : 16));
+  const colors = isHeal
+    ? ['#10b981', '#34d399', '#6ee7b7', '#ffffff']
+    : (type === 'shield_break'
+      ? ['#00f0ff', '#ffffff', '#00b4d8', '#caf0f8']
+      : ['#ff4b2b', '#ff416c', '#ffb300', '#ffffff']);
 
   for (let i = 0; i < count; i++) {
     const angle = Math.random() * Math.PI * 2;
@@ -372,7 +471,7 @@ function createExplosionParticles(x, y, radius, type) {
     particles.push({
       x, y,
       vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed,
+      vy: Math.sin(angle) * speed - (isHeal ? 1.5 : 0),
       size: Math.random() * 5 + 3,
       color: colors[Math.floor(Math.random() * colors.length)],
       life: 1.0,
@@ -381,54 +480,103 @@ function createExplosionParticles(x, y, radius, type) {
   }
 }
 
-// Entrées Clavier & Souris (optimisées sans spam réseau)
+// Orientation dynamique de la tourelle vers le curseur de souris
+function updateTurretAim() {
+  const me = players[myId];
+  if (!me) return;
+  const worldMouseX = mouseScreenPos.x + camera.x;
+  const worldMouseY = mouseScreenPos.y + camera.y;
+  const aimAngle = Math.atan2(worldMouseY - me.y, worldMouseX - me.x);
+  inputState.turretAngle = aimAngle;
+  if (me.isAlive) {
+    me.turretAngle = aimAngle;
+  }
+}
+
+// Suivi du déplacement de la souris sur tout l'écran
+window.addEventListener('mousemove', (e) => {
+  mouseScreenPos.x = e.clientX;
+  mouseScreenPos.y = e.clientY;
+  updateTurretAim();
+});
+
+// Entrées Clavier
 window.addEventListener('keydown', (e) => {
-  if (e.repeat) return; // Évite d'envoyer 50 paquets/seconde par touche enfoncée
+  if (e.repeat) return;
   const key = e.key.toLowerCase();
   let changed = false;
 
-  if ((key === 'z' || key === 'w' || key === 'arrowup') && !inputState.forward) {
-    inputState.forward = true;
-    changed = true;
+  if (currentControlMode === 'fluid') {
+    // Mode Fluide Moderne : Z=Haut, S=Bas, Q=Gauche, D=Droite
+    if ((key === 'z' || key === 'w' || key === 'arrowup') && !inputState.up) {
+      inputState.up = true;
+      inputState.forward = true;
+      changed = true;
+    }
+    if ((key === 's' || key === 'arrowdown') && !inputState.down) {
+      inputState.down = true;
+      inputState.backward = true;
+      changed = true;
+    }
+    if ((key === 'q' || key === 'a' || key === 'arrowleft') && !inputState.left) {
+      inputState.left = true;
+      changed = true;
+    }
+    if ((key === 'd' || key === 'arrowright') && !inputState.right) {
+      inputState.right = true;
+      changed = true;
+    }
+  } else {
+    // Mode Classique Tank
+    if ((key === 'z' || key === 'w' || key === 'arrowup') && !inputState.forward) {
+      inputState.forward = true;
+      changed = true;
+    }
+    if ((key === 's' || key === 'arrowdown') && !inputState.backward) {
+      inputState.backward = true;
+      changed = true;
+    }
+    if ((key === 'q' || key === 'a' || key === 'arrowleft') && !inputState.left) {
+      inputState.left = true;
+      changed = true;
+    }
+    if ((key === 'd' || key === 'arrowright') && !inputState.right) {
+      inputState.right = true;
+      changed = true;
+    }
   }
-  if ((key === 's' || key === 'arrowdown') && !inputState.backward) {
-    inputState.backward = true;
-    changed = true;
-  }
-  if ((key === 'q' || key === 'a' || key === 'arrowleft') && !inputState.left) {
-    inputState.left = true;
-    changed = true;
-  }
-  if ((key === 'd' || key === 'arrowright') && !inputState.right) {
-    inputState.right = true;
-    changed = true;
-  }
+
   if (key === ' ' && !inputState.shoot) {
     inputState.shoot = true;
     changed = true;
     e.preventDefault();
   }
 
-  if (changed) sendInputs();
+  if (changed) {
+    updateTurretAim();
+    sendInputs();
+  }
 });
 
 window.addEventListener('keyup', (e) => {
   const key = e.key.toLowerCase();
   let changed = false;
 
-  if ((key === 'z' || key === 'w' || key === 'arrowup') && inputState.forward) {
+  if (key === 'z' || key === 'w' || key === 'arrowup') {
+    inputState.up = false;
     inputState.forward = false;
     changed = true;
   }
-  if ((key === 's' || key === 'arrowdown') && inputState.backward) {
+  if (key === 's' || key === 'arrowdown') {
+    inputState.down = false;
     inputState.backward = false;
     changed = true;
   }
-  if ((key === 'q' || key === 'a' || key === 'arrowleft') && inputState.left) {
+  if (key === 'q' || key === 'a' || key === 'arrowleft') {
     inputState.left = false;
     changed = true;
   }
-  if ((key === 'd' || key === 'arrowright') && inputState.right) {
+  if (key === 'd' || key === 'arrowright') {
     inputState.right = false;
     changed = true;
   }
@@ -437,13 +585,17 @@ window.addEventListener('keyup', (e) => {
     changed = true;
   }
 
-  if (changed) sendInputs();
+  if (changed) {
+    updateTurretAim();
+    sendInputs();
+  }
 });
 
-// Clic souris pour tirer droit devant
+// Clic souris pour tirer dans la direction de visée
 window.addEventListener('mousedown', (e) => {
-  if (e.target.closest('#lobby-screen') || e.target.closest('.btn-sound')) return;
+  if (e.target.closest('#lobby-screen') || e.target.closest('.btn-sound') || e.target.closest('.btn-hub')) return;
   inputState.shoot = true;
+  updateTurretAim();
   sendInputs();
 });
 
@@ -454,27 +606,35 @@ window.addEventListener('mouseup', () => {
 
 function sendInputs() {
   if (!myId || !players[myId]) return;
+  inputState.controlMode = currentControlMode;
   socket.emit('player_input', inputState);
 }
 
 // Heartbeat régulier pour garantir l'intégrité de l'état sans saturer le réseau (25 Hz)
 setInterval(() => {
   if (myId && players[myId]) {
+    updateTurretAim();
+    inputState.controlMode = currentControlMode;
     socket.emit('player_input', inputState);
   }
 }, 40);
 
-// Contrôles tactiles (Joysticks virtuels)
+// Contrôles tactiles (Double joystick virtuel Mobile & Tablette)
 setupTouchControls();
 
 function setupTouchControls() {
   const moveZone = document.getElementById('touch-move-zone');
   const moveStick = document.getElementById('touch-move-stick');
+  const aimZone = document.getElementById('touch-aim-zone');
+  const aimStick = document.getElementById('touch-aim-stick');
   const fireBtn = document.getElementById('touch-fire-btn');
 
   let moveTouchId = null;
   let moveCenter = { x: 0, y: 0 };
+  let aimTouchId = null;
+  let aimCenter = { x: 0, y: 0 };
 
+  // Joystick gauche : Déplacement
   moveZone.addEventListener('touchstart', (e) => {
     e.preventDefault();
     const touch = e.changedTouches[0];
@@ -498,6 +658,8 @@ function setupTouchControls() {
     moveStick.style.transform = `translate(0px, 0px)`;
     inputState.forward = false;
     inputState.backward = false;
+    inputState.up = false;
+    inputState.down = false;
     inputState.left = false;
     inputState.right = false;
     sendInputs();
@@ -518,12 +680,72 @@ function setupTouchControls() {
     const stickY = Math.sin(angle) * clampedDist;
     moveStick.style.transform = `translate(${stickX}px, ${stickY}px)`;
 
-    // Interpréter la direction
-    inputState.forward = dy < -15;
-    inputState.backward = dy > 15;
-    inputState.left = dx < -15;
-    inputState.right = dx > 15;
+    if (dist > 10) {
+      inputState.up = dy < -12;
+      inputState.down = dy > 12;
+      inputState.forward = inputState.up;
+      inputState.backward = inputState.down;
+      inputState.left = dx < -12;
+      inputState.right = dx > 12;
+    } else {
+      inputState.up = false;
+      inputState.down = false;
+      inputState.forward = false;
+      inputState.backward = false;
+      inputState.left = false;
+      inputState.right = false;
+    }
     sendInputs();
+  }
+
+  // Joystick droit : Visée à 360°
+  if (aimZone && aimStick) {
+    aimZone.addEventListener('touchstart', (e) => {
+      if (e.target.closest('#touch-fire-btn')) return;
+      e.preventDefault();
+      const touch = e.changedTouches[0];
+      aimTouchId = touch.identifier;
+      const rect = aimZone.getBoundingClientRect();
+      aimCenter = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
+      handleAimTouch(touch);
+    }, { passive: false });
+
+    aimZone.addEventListener('touchmove', (e) => {
+      e.preventDefault();
+      for (let i = 0; i < e.changedTouches.length; i++) {
+        if (e.changedTouches[i].identifier === aimTouchId) {
+          handleAimTouch(e.changedTouches[i]);
+        }
+      }
+    }, { passive: false });
+
+    function endAimTouch() {
+      aimTouchId = null;
+      aimStick.style.transform = `translate(0px, 0px)`;
+    }
+
+    aimZone.addEventListener('touchend', endAimTouch);
+    aimZone.addEventListener('touchcancel', endAimTouch);
+
+    function handleAimTouch(touch) {
+      const dx = touch.clientX - aimCenter.x;
+      const dy = touch.clientY - aimCenter.y;
+      const dist = Math.hypot(dx, dy);
+      const maxRadius = 45;
+      const clampedDist = Math.min(dist, maxRadius);
+      const angle = Math.atan2(dy, dx);
+
+      const stickX = Math.cos(angle) * clampedDist;
+      const stickY = Math.sin(angle) * clampedDist;
+      aimStick.style.transform = `translate(${stickX}px, ${stickY}px)`;
+
+      if (dist > 12) {
+        inputState.turretAngle = angle;
+        const me = players[myId];
+        if (me) me.turretAngle = angle;
+        sendInputs();
+      }
+    }
   }
 
   // Bouton de tir tactile
@@ -548,10 +770,9 @@ function gameLoop(currentTime) {
 
   const deltaMs = currentTime - lastFrameTime;
   lastFrameTime = currentTime;
-  // Facteur normalisé (1.0 = ~60 FPS soit 16.6ms)
   const dt = Math.min(2.5, Math.max(0.2, (deltaMs || 16.6) / 16.666));
 
-  // 1. Interpolation ultra-fluide de TOUS les tanks (aucun retour en arrière possible)
+  // 1. Interpolation fluide de tous les tanks
   for (const id in players) {
     const p = players[id];
     if (p.targetX !== undefined) {
@@ -559,7 +780,17 @@ function gameLoop(currentTime) {
       p.x = lerp(p.x, p.targetX, factor);
       p.y = lerp(p.y, p.targetY, factor);
       p.bodyAngle = lerpAngle(p.bodyAngle, p.targetAngle, factor);
+
+      // Pour les autres joueurs, interpolation de la tourelle
+      if (id !== myId && p.targetTurretAngle !== undefined) {
+        p.turretAngle = lerpAngle(p.turretAngle !== undefined ? p.turretAngle : p.bodyAngle, p.targetTurretAngle, factor);
+      }
     }
+  }
+
+  // Pour le joueur local, orientation instantanée de la tourelle vers la souris (zéro latence)
+  if (!isTouchDevice) {
+    updateTurretAim();
   }
 
   // 2. Extrapolation continue des projectiles entre les ticks réseau
@@ -577,13 +808,21 @@ function gameLoop(currentTime) {
     camera.y += (targetCamY - camera.y) * Math.min(1, 0.2 * dt);
   }
 
-  render();
+  render(dt);
 }
 requestAnimationFrame(gameLoop);
 
-function render() {
+function render(dt) {
   ctx.save();
   ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+  // Tremblement d'écran en cas d'impact
+  if (screenShake > 0) {
+    const shakeX = (Math.random() - 0.5) * screenShake;
+    const shakeY = (Math.random() - 0.5) * screenShake;
+    ctx.translate(shakeX, shakeY);
+    screenShake = Math.max(0, screenShake - 0.6 * dt);
+  }
 
   // Déplacement relatif à la caméra
   ctx.translate(-camera.x, -camera.y);
@@ -594,7 +833,7 @@ function render() {
   // 2. Dessiner les murs
   drawWalls();
 
-  // 3. Dessiner les Power-ups
+  // 3. Dessiner les Power-ups (dont le Kit de Soin rare)
   drawPowerups();
 
   // 4. Dessiner les Tanks
@@ -607,6 +846,15 @@ function render() {
 
   // 6. Dessiner les Particules
   drawParticles();
+
+  // 7. Dessiner les Textes Flottants (Dégâts, Soins)
+  drawFloatingTexts(dt);
+
+  // 8. Viseur laser & réticule de visée 360° pour le joueur local sur PC
+  const me = players[myId];
+  if (me && me.isAlive && !isTouchDevice) {
+    drawAimReticle(me);
+  }
 
   ctx.restore();
 }
@@ -638,16 +886,13 @@ function drawGrid() {
 function drawWalls() {
   if (!mapConfig.walls) return;
   mapConfig.walls.forEach(w => {
-    // Fond du mur métallique
     ctx.fillStyle = '#1e2634';
     ctx.fillRect(w.x, w.y, w.width, w.height);
 
-    // Bordure lumineuse
     ctx.strokeStyle = '#388bfd';
     ctx.lineWidth = 2;
     ctx.strokeRect(w.x, w.y, w.width, w.height);
 
-    // Biseau intérieur
     ctx.fillStyle = 'rgba(255, 255, 255, 0.05)';
     ctx.fillRect(w.x + 3, w.y + 3, w.width - 6, w.height - 6);
   });
@@ -656,6 +901,25 @@ function drawWalls() {
 // Dessin d'un Tank
 function drawTank(tank) {
   if (!tank.isAlive) return;
+
+  const maxHp = tank.maxHealth || 150;
+
+  // Effet de fumée et étincelles si le tank est blessé
+  if (tank.health <= maxHp * 0.5) {
+    const isCritical = tank.health <= maxHp * 0.25;
+    if (Math.random() < (isCritical ? 0.4 : 0.18)) {
+      particles.push({
+        x: tank.x + (Math.random() - 0.5) * 16,
+        y: tank.y + (Math.random() - 0.5) * 16,
+        vx: (Math.random() - 0.5) * 0.6 - Math.cos(tank.bodyAngle) * 0.4,
+        vy: -Math.random() * 1.4 - 0.5,
+        size: Math.random() * 4 + 3,
+        color: isCritical && Math.random() < 0.4 ? '#ff9f1c' : (isCritical ? '#262626' : '#6b7280'),
+        life: 0.8,
+        decay: 0.03
+      });
+    }
+  }
 
   ctx.save();
   ctx.translate(tank.x, tank.y);
@@ -666,16 +930,16 @@ function drawTank(tank) {
   ctx.ellipse(3, 4, tank.width / 2 + 4, tank.height / 2 + 4, tank.bodyAngle, 0, Math.PI * 2);
   ctx.fill();
 
-  // 2. Châssis (corps du tank avec chenilles)
+  // 2. Châssis (corps du tank avec chenilles orienté selon bodyAngle)
   ctx.save();
   ctx.rotate(tank.bodyAngle);
 
-  // Chenille gauche & droite
+  // Chenilles
   ctx.fillStyle = '#1c1f24';
   ctx.fillRect(-tank.width / 2, -tank.height / 2, tank.width, 7);
   ctx.fillRect(-tank.width / 2, tank.height / 2 - 7, tank.width, 7);
 
-  // Dessin des crans de chenilles
+  // Crans de chenilles
   ctx.fillStyle = '#3a424e';
   for (let cx = -tank.width / 2 + 2; cx < tank.width / 2 - 2; cx += 6) {
     ctx.fillRect(cx, -tank.height / 2, 2, 7);
@@ -693,16 +957,21 @@ function drawTank(tank) {
 
   ctx.restore();
 
-  // 3. Tourelle et Canon (fixe : toujours alignée avec le châssis)
+  // 3. Tourelle et Canon (orientée indépendamment selon turretAngle pour viser à 360°)
   ctx.save();
-  ctx.rotate(tank.bodyAngle);
+  const turretAngle = tank.turretAngle !== undefined ? tank.turretAngle : tank.bodyAngle;
+  ctx.rotate(turretAngle);
 
-  // Canon
+  // Canon principal
   ctx.fillStyle = '#2d333b';
-  ctx.fillRect(0, -4, 28, 8);
+  ctx.fillRect(0, -4, 30, 8);
   ctx.strokeStyle = '#0d1117';
   ctx.lineWidth = 1.5;
-  ctx.strokeRect(0, -4, 28, 8);
+  ctx.strokeRect(0, -4, 30, 8);
+
+  // Muzzle (frein de bouche)
+  ctx.fillStyle = '#161b22';
+  ctx.fillRect(26, -5.5, 5, 11);
 
   // Base circulaire de la tourelle
   ctx.fillStyle = '#1c1f24';
@@ -713,16 +982,21 @@ function drawTank(tank) {
   ctx.lineWidth = 3;
   ctx.stroke();
 
+  // Écoutille supérieure
+  ctx.fillStyle = tank.color;
+  ctx.beginPath();
+  ctx.arc(0, 0, 4, 0, Math.PI * 2);
+  ctx.fill();
+
   ctx.restore();
 
-  // 4. Bouclier protecteur physique (visible jusqu'à sa destruction !)
+  // 4. Bouclier protecteur physique (visible jusqu'à sa destruction)
   const now = Date.now();
   if (tank.hasShield || (tank.shieldTime && now < tank.shieldTime)) {
     const pulse = Math.sin(now / 110) * 2;
     const r = (tank.radius || 24) + 12 + pulse;
 
     ctx.save();
-    // Halo lumineux externe cyan
     ctx.strokeStyle = '#00f0ff';
     ctx.lineWidth = 3;
     ctx.shadowColor = '#00f0ff';
@@ -731,11 +1005,9 @@ function drawTank(tank) {
     ctx.arc(0, 0, r, 0, Math.PI * 2);
     ctx.stroke();
 
-    // Remplissage d'énergie translucide
     ctx.fillStyle = 'rgba(0, 210, 255, 0.18)';
     ctx.fill();
 
-    // Anneau d'énergie intérieur en rotation
     ctx.rotate(now / 350);
     ctx.setLineDash([12, 8]);
     ctx.strokeStyle = 'rgba(255, 255, 255, 0.85)';
@@ -746,35 +1018,101 @@ function drawTank(tank) {
     ctx.restore();
   }
 
-  // 5. Barre de vie et pseudo au-dessus du tank
   ctx.restore(); // retour au repère monde
 
-  // Pseudo
+  // 5. Barre de vie et pseudo au-dessus du tank
   ctx.fillStyle = '#ffffff';
   ctx.font = 'bold 12px sans-serif';
   ctx.textAlign = 'center';
   ctx.shadowColor = '#000000';
   ctx.shadowBlur = 4;
-  ctx.fillText(tank.name, tank.x, tank.y - 32);
+  ctx.fillText(tank.name, tank.x, tank.y - 34);
   ctx.shadowBlur = 0;
 
-  // Mini barre de vie
-  const barW = 44;
-  const barH = 5;
+  // Mini barre de vie segmentée (6 barres de 25 PV chacune = 150 PV)
+  const barW = 50;
+  const barH = 6;
   const barX = tank.x - barW / 2;
-  const barY = tank.y - 25;
-  ctx.fillStyle = 'rgba(0, 0, 0, 0.6)';
-  ctx.fillRect(barX, barY, barW, barH);
-  const hpPct = Math.max(0, tank.health / tank.maxHealth);
-  ctx.fillStyle = hpPct > 0.5 ? '#38ef7d' : (hpPct > 0.25 ? '#ffb300' : '#e52d27');
+  const barY = tank.y - 28;
+
+  ctx.fillStyle = 'rgba(0, 0, 0, 0.75)';
+  ctx.fillRect(barX - 1, barY - 1, barW + 2, barH + 2);
+
+  const hpPct = Math.max(0, Math.min(1, tank.health / maxHp));
+  ctx.fillStyle = hpPct > 0.5 ? '#38ef7d' : (hpPct > 0.25 ? '#ffb300' : '#ef4444');
   ctx.fillRect(barX, barY, barW * hpPct, barH);
+
+  // Lignes de segmentation (pour compter ses PV restants en un coup d'œil !)
+  ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
+  ctx.lineWidth = 1;
+  const segments = 6;
+  for (let s = 1; s < segments; s++) {
+    const sx = barX + (barW / segments) * s;
+    ctx.beginPath();
+    ctx.moveTo(sx, barY);
+    ctx.lineTo(sx, barY + barH);
+    ctx.stroke();
+  }
+}
+
+// Dessin du réticule de visée et du laser guide pour le joueur local
+function drawAimReticle(me) {
+  const worldMouseX = mouseScreenPos.x + camera.x;
+  const worldMouseY = mouseScreenPos.y + camera.y;
+
+  const barrelLength = 32;
+  const turretAngle = me.turretAngle !== undefined ? me.turretAngle : me.bodyAngle;
+  const muzzleX = me.x + Math.cos(turretAngle) * barrelLength;
+  const muzzleY = me.y + Math.sin(turretAngle) * barrelLength;
+
+  ctx.save();
+
+  // Faisceau laser discret entre le bout du canon et le réticule
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+  ctx.lineWidth = 1.2;
+  ctx.setLineDash([4, 6]);
+  ctx.beginPath();
+  ctx.moveTo(muzzleX, muzzleY);
+  ctx.lineTo(worldMouseX, worldMouseY);
+  ctx.stroke();
+  ctx.setLineDash([]);
+
+  // Réticule circulaire tactique
+  const r = 13;
+  ctx.strokeStyle = me.color || '#38ef7d';
+  ctx.lineWidth = 2;
+  ctx.shadowColor = me.color || '#38ef7d';
+  ctx.shadowBlur = 8;
+
+  ctx.beginPath();
+  ctx.arc(worldMouseX, worldMouseY, r, 0, Math.PI * 2);
+  ctx.stroke();
+
+  // 4 encoches de visée
+  ctx.beginPath();
+  ctx.moveTo(worldMouseX - r - 4, worldMouseY);
+  ctx.lineTo(worldMouseX - r + 3, worldMouseY);
+  ctx.moveTo(worldMouseX + r - 3, worldMouseY);
+  ctx.lineTo(worldMouseX + r + 4, worldMouseY);
+  ctx.moveTo(worldMouseX, worldMouseY - r - 4);
+  ctx.lineTo(worldMouseX, worldMouseY - r + 3);
+  ctx.moveTo(worldMouseX, worldMouseY + r - 3);
+  ctx.lineTo(worldMouseX, worldMouseY + r + 4);
+  ctx.stroke();
+
+  // Point central
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(worldMouseX, worldMouseY, 2, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.restore();
 }
 
 // Dessin des projectiles
 function drawBullets() {
   bullets.forEach(b => {
     ctx.save();
-    // Halo lumineux
     ctx.fillStyle = b.playerColor || '#ff416c';
     ctx.shadowColor = b.playerColor || '#ff416c';
     ctx.shadowBlur = 8;
@@ -782,7 +1120,6 @@ function drawBullets() {
     ctx.arc(b.x, b.y, b.radius, 0, Math.PI * 2);
     ctx.fill();
 
-    // Centre blanc chaud
     ctx.fillStyle = '#ffffff';
     ctx.beginPath();
     ctx.arc(b.x, b.y, b.radius * 0.5, 0, Math.PI * 2);
@@ -791,7 +1128,7 @@ function drawBullets() {
   });
 }
 
-// Dessin des Powerups
+// Dessin des Powerups & du Kit de Soin rare
 function drawPowerups() {
   const now = Date.now();
   powerups.forEach(p => {
@@ -799,25 +1136,80 @@ function drawPowerups() {
     ctx.save();
     ctx.translate(p.x, p.y);
 
-    // Aura extérieure
-    ctx.strokeStyle = p.color;
-    ctx.lineWidth = 2.5;
-    ctx.beginPath();
-    ctx.arc(0, 0, p.radius + pulse, 0, Math.PI * 2);
-    ctx.stroke();
+    if (p.type === 'health') {
+      // 🏥 BONUS SANTÉ RARE : Boîtier médical émeraude étincelant avec croix blanche
+      const r = p.radius + pulse;
 
-    ctx.fillStyle = p.color;
-    ctx.beginPath();
-    ctx.arc(0, 0, p.radius * 0.7, 0, Math.PI * 2);
-    ctx.fill();
+      // Halo externe rayonnant
+      ctx.shadowColor = '#10b981';
+      ctx.shadowBlur = 18;
 
-    // Label du Powerup
-    ctx.fillStyle = '#ffffff';
-    ctx.font = 'bold 9px sans-serif';
-    ctx.textAlign = 'center';
-    ctx.shadowColor = '#000';
-    ctx.shadowBlur = 3;
-    ctx.fillText(p.label, 0, -p.radius - 6);
+      ctx.strokeStyle = '#34d399';
+      ctx.lineWidth = 3;
+      ctx.beginPath();
+      ctx.arc(0, 0, r, 0, Math.PI * 2);
+      ctx.stroke();
+
+      // Fond vert émeraude vibrant
+      const grad = ctx.createRadialGradient(0, 0, 4, 0, 0, r);
+      grad.addColorStop(0, '#6ee7b7');
+      grad.addColorStop(0.7, '#059669');
+      grad.addColorStop(1, '#064e3b');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(0, 0, r * 0.85, 0, Math.PI * 2);
+      ctx.fill();
+
+      // Croix médicale blanche ➕ au centre
+      ctx.shadowBlur = 0;
+      ctx.fillStyle = '#ffffff';
+      const crossW = 6;
+      const crossL = 16;
+      ctx.fillRect(-crossW / 2, -crossL / 2, crossW, crossL);
+      ctx.fillRect(-crossL / 2, -crossW / 2, crossL, crossW);
+
+      // Label au-dessus
+      ctx.fillStyle = '#6ee7b7';
+      ctx.font = 'bold 11px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.shadowColor = '#000';
+      ctx.shadowBlur = 4;
+      ctx.fillText('❤️ SOIN +50', 0, -r - 8);
+
+      // Particules montantes de soin
+      if (Math.random() < 0.18) {
+        particles.push({
+          x: p.x + (Math.random() - 0.5) * 22,
+          y: p.y + (Math.random() - 0.5) * 22,
+          vx: (Math.random() - 0.5) * 0.7,
+          vy: -Math.random() * 1.5 - 0.5,
+          size: Math.random() * 3 + 2,
+          color: '#34d399',
+          life: 0.8,
+          decay: 0.03
+        });
+      }
+    } else {
+      // Autres bonus classiques (Vitesse, Tir Rapide, Bouclier, Triple Tir)
+      ctx.strokeStyle = p.color;
+      ctx.lineWidth = 2.5;
+      ctx.beginPath();
+      ctx.arc(0, 0, p.radius + pulse, 0, Math.PI * 2);
+      ctx.stroke();
+
+      ctx.fillStyle = p.color;
+      ctx.beginPath();
+      ctx.arc(0, 0, p.radius * 0.7, 0, Math.PI * 2);
+      ctx.fill();
+
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 9px sans-serif';
+      ctx.textAlign = 'center';
+      ctx.shadowColor = '#000';
+      ctx.shadowBlur = 3;
+      ctx.fillText(p.label, 0, -p.radius - 6);
+    }
+
     ctx.restore();
   });
 }
@@ -845,6 +1237,30 @@ function drawParticles() {
   }
 }
 
+// Dessin des textes flottants (Dégâts, Soins)
+function drawFloatingTexts(dt) {
+  for (let i = floatingTexts.length - 1; i >= 0; i--) {
+    const ft = floatingTexts[i];
+    ft.y += ft.vy * dt;
+    ft.life -= 0.02 * dt;
+
+    if (ft.life <= 0) {
+      floatingTexts.splice(i, 1);
+      continue;
+    }
+
+    ctx.save();
+    ctx.globalAlpha = Math.max(0, ft.life);
+    ctx.fillStyle = ft.color;
+    ctx.font = `bold ${ft.fontSize}px sans-serif`;
+    ctx.textAlign = 'center';
+    ctx.shadowColor = '#000000';
+    ctx.shadowBlur = 5;
+    ctx.fillText(ft.text, ft.x, ft.y);
+    ctx.restore();
+  }
+}
+
 // Quitter proprement la session Tank Clash
 function leaveTankGame() {
   try {
@@ -858,4 +1274,3 @@ document.querySelectorAll('a[href="/"]').forEach(link => {
 });
 window.addEventListener('pagehide', leaveTankGame);
 window.addEventListener('beforeunload', leaveTankGame);
-

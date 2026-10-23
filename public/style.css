@@ -21,6 +21,7 @@ body, html {
   width: 100vw;
   height: 100vh;
   background: #12161f;
+  cursor: crosshair;
 }
 
 /* Écrans superposés */
@@ -131,6 +132,44 @@ body, html {
   border-color: #ffffff;
   transform: scale(1.2);
   box-shadow: 0 0 12px rgba(255, 255, 255, 0.7);
+}
+
+.mode-selector {
+  display: flex;
+  gap: 10px;
+  width: 100%;
+}
+
+.mode-toggle-btn {
+  flex: 1;
+  padding: 10px 8px;
+  background: #0d1117;
+  border: 1px solid #30363d;
+  color: #8b949e;
+  border-radius: 8px;
+  font-size: 13px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.mode-toggle-btn:hover {
+  border-color: #58a6ff;
+  color: #c9d1d9;
+}
+
+.mode-toggle-btn.active {
+  background: rgba(56, 139, 253, 0.15);
+  border-color: #58a6ff;
+  color: #58a6ff;
+  box-shadow: 0 0 10px rgba(88, 166, 255, 0.25);
+}
+
+.mode-hint {
+  font-size: 11px;
+  color: #7ee787;
+  margin-top: 6px;
+  text-align: left;
 }
 
 .btn-play {

@@ -100,7 +100,8 @@ const POWERUP_TYPES = [
 ];
 
 function spawnPowerup() {
-  if (gameState.powerups.length >= 4) return;
+  const regularPowerups = gameState.powerups.filter(p => p.type !== 'health');
+  if (regularPowerups.length >= 3) return;
   const pType = POWERUP_TYPES[Math.floor(Math.random() * POWERUP_TYPES.length)];
   let safe = false;
   let px = 0, py = 0;
@@ -127,8 +128,52 @@ function spawnPowerup() {
   }
 }
 
-// Spawner un powerup toutes les 12 secondes
-setInterval(spawnPowerup, 12000);
+// Spawner un kit de soin rare (pas tout le temps, max 1 sur la carte)
+function spawnRareHealthKit() {
+  const hasHealthPack = gameState.powerups.some(p => p.type === 'health');
+  if (hasHealthPack) return;
+
+  const activePlayers = Object.values(gameState.players).filter(p => p.isAlive);
+  if (activePlayers.length === 0) return;
+
+  let safe = false;
+  let px = 0, py = 0;
+  for (let tries = 0; tries < 25; tries++) {
+    px = 120 + Math.random() * (MAP_WIDTH - 240);
+    py = 120 + Math.random() * (MAP_HEIGHT - 240);
+    const collides = WALLS.some(w => checkRectCircle(w, px, py, 35));
+    if (!collides) {
+      safe = true;
+      break;
+    }
+  }
+
+  if (safe) {
+    gameState.powerups.push({
+      id: Date.now() + Math.random(),
+      x: px,
+      y: py,
+      type: 'health',
+      color: '#10b981',
+      label: 'SOIN +50',
+      radius: 20,
+      createdAt: Date.now()
+    });
+
+    io.emit('chat_message', {
+      sender: 'Ravitaillement',
+      text: '🏥 Un kit de réparation rare a été largué dans l\'arène !',
+      color: '#10b981'
+    });
+    io.emit('sound_event', { type: 'health_spawn', x: px, y: py });
+  }
+}
+
+// Spawner un powerup classique toutes les 14 secondes
+setInterval(spawnPowerup, 14000);
+
+// Spawner le kit de soin rare toutes les 35 secondes (1 max dans l'arène)
+setInterval(spawnRareHealthKit, 35000);
 
 // Helper : collision Cercle vs Rectangle
 function checkRectCircle(rect, cx, cy, radius) {
@@ -182,8 +227,8 @@ function manageBots() {
           radius: 24,
           width: 44,
           height: 36,
-          health: 100,
-          maxHealth: 100,
+          health: 150,
+          maxHealth: 150,
           isAlive: true,
           kills: 0,
           deaths: 0,
@@ -191,11 +236,11 @@ function manageBots() {
           shield: Date.now() + 2500,
           shieldHits: 0,
           shieldExpiresAt: 0,
-          speedMultiplier: 0.82, // Vitesse équilibrée pour un combat dynamique et amusant
+          speedMultiplier: 0.85, // Vitesse équilibrée pour un combat dynamique et amusant
           rapidFireUntil: 0,
           tripleShotUntil: 0,
           lastShotTime: 0,
-          inputs: { forward: false, backward: false, left: false, right: false, shoot: false },
+          inputs: { forward: false, backward: false, left: false, right: false, shoot: false, controlMode: 'classic' },
           ai: {
             reverseCooldown: 0,
             preferredDistance: 240 + Math.random() * 80
@@ -248,8 +293,21 @@ function updateBotAI(bot, now) {
     return;
   }
 
+  // La tourelle du bot s'oriente indépendamment vers la cible !
   const angleToTarget = Math.atan2(nearestTarget.y - bot.y, nearestTarget.x - bot.x);
-  let diff = (angleToTarget - bot.bodyAngle) % (Math.PI * 2);
+  bot.turretAngle = angleToTarget;
+
+  // Si le bot a peu de PV (< 75) et qu'un kit de soin rare est disponible sur la carte, il tente de le récupérer
+  let steerTarget = nearestTarget;
+  if (bot.health < 75) {
+    const healthPack = gameState.powerups.find(p => p.type === 'health');
+    if (healthPack) {
+      steerTarget = healthPack;
+    }
+  }
+
+  const angleToSteer = Math.atan2(steerTarget.y - bot.y, steerTarget.x - bot.x);
+  let diff = (angleToSteer - bot.bodyAngle) % (Math.PI * 2);
   if (diff < -Math.PI) diff += Math.PI * 2;
   if (diff > Math.PI) diff -= Math.PI * 2;
 
@@ -278,7 +336,7 @@ function updateBotAI(bot, now) {
   } else {
     bot.inputs.backward = false;
 
-    // Rotation fluide vers la cible
+    // Rotation fluide du châssis vers la direction voulue
     if (Math.abs(diff) > 0.08) {
       bot.inputs.left = diff < 0;
       bot.inputs.right = diff > 0;
@@ -288,8 +346,11 @@ function updateBotAI(bot, now) {
     }
 
     // Distance d'engagement tactique
-    const targetDist = Math.hypot(nearestTarget.x - bot.x, nearestTarget.y - bot.y);
-    if (targetDist > bot.ai.preferredDistance) {
+    const targetDist = Math.hypot(steerTarget.x - bot.x, steerTarget.y - bot.y);
+    if (steerTarget !== nearestTarget) {
+      // En route vers le kit de soin !
+      bot.inputs.forward = true;
+    } else if (targetDist > bot.ai.preferredDistance) {
       bot.inputs.forward = true;
     } else if (targetDist < 140) {
       bot.inputs.backward = true;
@@ -298,9 +359,9 @@ function updateBotAI(bot, now) {
     }
   }
 
-  // Décision de tir (aligné vers la cible et à bonne portée)
+  // Décision de tir : la tourelle vise directement la cible
   const realDist = Math.hypot(nearestTarget.x - bot.x, nearestTarget.y - bot.y);
-  if (Math.abs(diff) < 0.22 && realDist < 600 && bot.ai.reverseCooldown === 0) {
+  if (realDist < 620 && bot.ai.reverseCooldown === 0) {
     bot.inputs.shoot = true;
     attemptShoot(bot);
   } else {
@@ -1166,8 +1227,8 @@ io.on('connection', (socket) => {
       radius: 24,
       width: 44,
       height: 36,
-      health: 100,
-      maxHealth: 100,
+      health: 150,
+      maxHealth: 150,
       isAlive: true,
       kills: 0,
       deaths: 0,
@@ -1184,8 +1245,11 @@ io.on('connection', (socket) => {
         backward: false,
         left: false,
         right: false,
+        up: false,
+        down: false,
         turretAngle: 0,
-        shoot: false
+        shoot: false,
+        controlMode: 'fluid'
       }
     };
 
@@ -1201,9 +1265,11 @@ io.on('connection', (socket) => {
 
   socket.on('player_input', (inputData) => {
     const player = gameState.players[socket.id];
-    if (player && player.isAlive) {
+    if (player && player.isAlive && inputData) {
       player.inputs = inputData;
-      player.turretAngle = player.bodyAngle;
+      if (typeof inputData.turretAngle === 'number') {
+        player.turretAngle = inputData.turretAngle;
+      }
 
       if (inputData.shoot) {
         attemptShoot(player);
@@ -1481,14 +1547,14 @@ function attemptShoot(player) {
 
   const barrelLength = 32;
   const isTriple = now < player.tripleShotUntil;
-  const aimAngle = player.bodyAngle;
+  const aimAngle = (typeof player.turretAngle === 'number') ? player.turretAngle : player.bodyAngle;
 
   const angles = isTriple 
     ? [aimAngle - 0.22, aimAngle, aimAngle + 0.22]
     : [aimAngle];
 
   angles.forEach(angle => {
-    const bulletSpeed = 12;
+    const bulletSpeed = 12.5;
     const bx = player.x + Math.cos(angle) * barrelLength;
     const by = player.y + Math.sin(angle) * barrelLength;
 
@@ -1528,6 +1594,7 @@ setInterval(() => {
       x: Math.round(p.x * 10) / 10,
       y: Math.round(p.y * 10) / 10,
       bodyAngle: Math.round(p.bodyAngle * 1000) / 1000,
+      turretAngle: Math.round((p.turretAngle !== undefined ? p.turretAngle : p.bodyAngle) * 1000) / 1000,
       health: p.health,
       maxHealth: p.maxHealth,
       isAlive: p.isAlive,
@@ -1660,27 +1727,59 @@ function updateGamePhysics() {
       continue;
     }
 
-    const baseSpeed = 3.6 * (player.speedMultiplier || 1.0);
-    const turnSpeed = 0.055;
-
-    // Rotation du châssis (et tourelle fixe alignée)
-    if (player.inputs.left) player.bodyAngle -= turnSpeed;
-    if (player.inputs.right) player.bodyAngle += turnSpeed;
-    player.turretAngle = player.bodyAngle;
+    const baseSpeed = 3.8 * (player.speedMultiplier || 1.0);
+    const turnSpeed = 0.065;
 
     let moveX = 0;
     let moveY = 0;
 
-    if (player.inputs.forward) {
-      moveX += Math.cos(player.bodyAngle) * baseSpeed;
-      moveY += Math.sin(player.bodyAngle) * baseSpeed;
-    }
-    if (player.inputs.backward) {
-      moveX -= Math.cos(player.bodyAngle) * (baseSpeed * 0.65);
-      moveY -= Math.sin(player.bodyAngle) * (baseSpeed * 0.65);
+    const isClassic = player.isBot || (player.inputs && player.inputs.controlMode === 'classic');
+
+    if (isClassic) {
+      // Rotation du châssis en mode tank classique
+      if (player.inputs.left) player.bodyAngle -= turnSpeed;
+      if (player.inputs.right) player.bodyAngle += turnSpeed;
+      if (!player.isBot && typeof player.inputs.turretAngle !== 'number') {
+        player.turretAngle = player.bodyAngle;
+      }
+
+      if (player.inputs.forward) {
+        moveX += Math.cos(player.bodyAngle) * baseSpeed;
+        moveY += Math.sin(player.bodyAngle) * baseSpeed;
+      }
+      if (player.inputs.backward) {
+        moveX -= Math.cos(player.bodyAngle) * (baseSpeed * 0.65);
+        moveY -= Math.sin(player.bodyAngle) * (baseSpeed * 0.65);
+      }
+    } else {
+      // Mode Fluide Moderne (ZQSD directionnel / joysticks)
+      let dx = 0;
+      let dy = 0;
+      if (player.inputs.up || player.inputs.forward) dy -= 1;
+      if (player.inputs.down || player.inputs.backward) dy += 1;
+      if (player.inputs.left) dx -= 1;
+      if (player.inputs.right) dx += 1;
+
+      if (dx !== 0 || dy !== 0) {
+        const len = Math.hypot(dx, dy);
+        moveX = (dx / len) * baseSpeed;
+        moveY = (dy / len) * baseSpeed;
+
+        // Rotation fluide et naturelle du châssis vers la direction de course
+        const targetMoveAngle = Math.atan2(dy, dx);
+        let diff = (targetMoveAngle - player.bodyAngle) % (Math.PI * 2);
+        if (diff < -Math.PI) diff += Math.PI * 2;
+        if (diff > Math.PI) diff -= Math.PI * 2;
+        player.bodyAngle += diff * 0.22;
+      }
+
+      // Si la tourelle n'est pas encore orientée à la souris, elle suit le châssis
+      if (typeof player.turretAngle !== 'number') {
+        player.turretAngle = player.bodyAngle;
+      }
     }
 
-    // Application du déplacement avec vérification des collisions de murs
+    // Application du déplacement avec vérification des collisions de murs (glissement fluide)
     const nextX = player.x + moveX;
     const nextY = player.y + moveY;
 
@@ -1704,6 +1803,10 @@ function updateGamePhysics() {
     }
     if (canMoveY) player.y = nextY;
 
+    // Confinement dans les bordures du champ de bataille
+    player.x = Math.max(player.radius + 15, Math.min(MAP_WIDTH - player.radius - 15, player.x));
+    player.y = Math.max(player.radius + 15, Math.min(MAP_HEIGHT - player.radius - 15, player.y));
+
     // Ramassage des powerups
     for (let i = gameState.powerups.length - 1; i >= 0; i--) {
       const pup = gameState.powerups[i];
@@ -1711,7 +1814,6 @@ function updateGamePhysics() {
       if (dist < player.radius + pup.radius) {
         applyPowerup(player, pup);
         gameState.powerups.splice(i, 1);
-        io.emit('sound_event', { type: 'powerup', x: player.x, y: player.y });
       }
     }
   }
@@ -1769,7 +1871,7 @@ function updateGamePhysics() {
           const hasActiveShield = (now < (player.shield || 0)) || ((player.shieldHits || 0) > 0 && now < (player.shieldExpiresAt || 0));
 
           if (!hasActiveShield) {
-            player.health -= 34; // 3 coups pour éliminer un tank
+            player.health -= 25; // 6 coups pour éliminer un tank (150 PV)
             io.emit('sound_event', { type: 'hit', x: player.x, y: player.y });
 
             if (player.health <= 0) {
@@ -1804,15 +1906,32 @@ function updateGamePhysics() {
 function applyPowerup(player, pup) {
   const now = Date.now();
   if (pup.type === 'speed') {
-    player.speedMultiplier = 1.6;
+    player.speedMultiplier = 1.55;
     setTimeout(() => { player.speedMultiplier = 1.0; }, 8000);
+    io.emit('sound_event', { type: 'powerup', x: player.x, y: player.y });
   } else if (pup.type === 'rapid') {
     player.rapidFireUntil = now + 8000;
+    io.emit('sound_event', { type: 'powerup', x: player.x, y: player.y });
   } else if (pup.type === 'shield') {
     player.shieldHits = 1; // Protège le joueur jusqu'à subir un impact destructeur
     player.shieldExpiresAt = now + 40000; // Ou 40 secondes max
+    io.emit('sound_event', { type: 'powerup', x: player.x, y: player.y });
   } else if (pup.type === 'triple') {
     player.tripleShotUntil = now + 8000;
+    io.emit('sound_event', { type: 'powerup', x: player.x, y: player.y });
+  } else if (pup.type === 'health') {
+    const healAmount = 50;
+    const oldHealth = player.health;
+    player.health = Math.min(player.maxHealth, player.health + healAmount);
+    const actualHeal = player.health - oldHealth;
+
+    io.emit('chat_message', {
+      sender: 'Soin',
+      text: `💚 ${player.name} s'est réparé (+${actualHeal > 0 ? actualHeal : 50} PV) !`,
+      color: '#34d399'
+    });
+    io.emit('sound_event', { type: 'heal', x: player.x, y: player.y });
+    gameState.explosions.push({ x: player.x, y: player.y, radius: 40, type: 'heal' });
   }
 }
 
