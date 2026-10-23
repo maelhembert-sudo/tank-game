@@ -293,9 +293,8 @@ function updateBotAI(bot, now) {
     return;
   }
 
-  // La tourelle du bot s'oriente indépendamment vers la cible !
-  const angleToTarget = Math.atan2(nearestTarget.y - bot.y, nearestTarget.x - bot.x);
-  bot.turretAngle = angleToTarget;
+  // La tourelle est fixe sur le châssis comme sur un vrai char
+  bot.turretAngle = bot.bodyAngle;
 
   // Si le bot a peu de PV (< 75) et qu'un kit de soin rare est disponible sur la carte, il tente de le récupérer
   let steerTarget = nearestTarget;
@@ -336,7 +335,7 @@ function updateBotAI(bot, now) {
   } else {
     bot.inputs.backward = false;
 
-    // Rotation fluide du châssis vers la direction voulue
+    // Rotation progressive vers la cible
     if (Math.abs(diff) > 0.08) {
       bot.inputs.left = diff < 0;
       bot.inputs.right = diff > 0;
@@ -348,7 +347,6 @@ function updateBotAI(bot, now) {
     // Distance d'engagement tactique
     const targetDist = Math.hypot(steerTarget.x - bot.x, steerTarget.y - bot.y);
     if (steerTarget !== nearestTarget) {
-      // En route vers le kit de soin !
       bot.inputs.forward = true;
     } else if (targetDist > bot.ai.preferredDistance) {
       bot.inputs.forward = true;
@@ -359,9 +357,9 @@ function updateBotAI(bot, now) {
     }
   }
 
-  // Décision de tir : la tourelle vise directement la cible
+  // Décision de tir : quand le canon est aligné sur la cible
   const realDist = Math.hypot(nearestTarget.x - bot.x, nearestTarget.y - bot.y);
-  if (realDist < 620 && bot.ai.reverseCooldown === 0) {
+  if (Math.abs(diff) < 0.22 && realDist < 600 && bot.ai.reverseCooldown === 0) {
     bot.inputs.shoot = true;
     attemptShoot(bot);
   } else {
@@ -1240,16 +1238,14 @@ io.on('connection', (socket) => {
       rapidFireUntil: 0,
       tripleShotUntil: 0,
       lastShotTime: 0,
+      turnVelocity: 0,
+      currentSpeed: 0,
       inputs: {
         forward: false,
         backward: false,
         left: false,
         right: false,
-        up: false,
-        down: false,
-        turretAngle: 0,
-        shoot: false,
-        controlMode: 'fluid'
+        shoot: false
       }
     };
 
@@ -1267,10 +1263,6 @@ io.on('connection', (socket) => {
     const player = gameState.players[socket.id];
     if (player && player.isAlive && inputData) {
       player.inputs = inputData;
-      if (typeof inputData.turretAngle === 'number') {
-        player.turretAngle = inputData.turretAngle;
-      }
-
       if (inputData.shoot) {
         attemptShoot(player);
       }
@@ -1547,7 +1539,8 @@ function attemptShoot(player) {
 
   const barrelLength = 32;
   const isTriple = now < player.tripleShotUntil;
-  const aimAngle = (typeof player.turretAngle === 'number') ? player.turretAngle : player.bodyAngle;
+  player.turretAngle = player.bodyAngle;
+  const aimAngle = player.bodyAngle;
 
   const angles = isTriple 
     ? [aimAngle - 0.22, aimAngle, aimAngle + 0.22]
@@ -1717,7 +1710,7 @@ function updateGamePhysics() {
     }
   }
 
-  // 1. Déplacement des Tanks
+  // 1. Déplacement des Tanks (Physique authentique et précise de char d'assaut)
   for (const id in gameState.players) {
     const player = gameState.players[id];
     if (!player.isAlive) {
@@ -1727,57 +1720,37 @@ function updateGamePhysics() {
       continue;
     }
 
-    const baseSpeed = 3.8 * (player.speedMultiplier || 1.0);
-    const turnSpeed = 0.065;
+    const baseSpeed = 3.6 * (player.speedMultiplier || 1.0);
+    const maxTurnSpeed = 0.038; // Vitesse maximale contrôlée (très stable, fini le châssis qui tourne trop vite)
+    const turnAccel = 0.007;   // Accélération douce : les petits coups de touches permettent d'ajuster le tir au pixel près !
 
-    let moveX = 0;
-    let moveY = 0;
-
-    const isClassic = player.isBot || (player.inputs && player.inputs.controlMode === 'classic');
-
-    if (isClassic) {
-      // Rotation du châssis en mode tank classique
-      if (player.inputs.left) player.bodyAngle -= turnSpeed;
-      if (player.inputs.right) player.bodyAngle += turnSpeed;
-      if (!player.isBot && typeof player.inputs.turretAngle !== 'number') {
-        player.turretAngle = player.bodyAngle;
-      }
-
-      if (player.inputs.forward) {
-        moveX += Math.cos(player.bodyAngle) * baseSpeed;
-        moveY += Math.sin(player.bodyAngle) * baseSpeed;
-      }
-      if (player.inputs.backward) {
-        moveX -= Math.cos(player.bodyAngle) * (baseSpeed * 0.65);
-        moveY -= Math.sin(player.bodyAngle) * (baseSpeed * 0.65);
-      }
+    // Rotation progressive du châssis
+    if (player.inputs.left) {
+      player.turnVelocity = Math.max(-maxTurnSpeed, (player.turnVelocity || 0) - turnAccel);
+    } else if (player.inputs.right) {
+      player.turnVelocity = Math.min(maxTurnSpeed, (player.turnVelocity || 0) + turnAccel);
     } else {
-      // Mode Fluide Moderne (ZQSD directionnel / joysticks)
-      let dx = 0;
-      let dy = 0;
-      if (player.inputs.up || player.inputs.forward) dy -= 1;
-      if (player.inputs.down || player.inputs.backward) dy += 1;
-      if (player.inputs.left) dx -= 1;
-      if (player.inputs.right) dx += 1;
-
-      if (dx !== 0 || dy !== 0) {
-        const len = Math.hypot(dx, dy);
-        moveX = (dx / len) * baseSpeed;
-        moveY = (dy / len) * baseSpeed;
-
-        // Rotation fluide et naturelle du châssis vers la direction de course
-        const targetMoveAngle = Math.atan2(dy, dx);
-        let diff = (targetMoveAngle - player.bodyAngle) % (Math.PI * 2);
-        if (diff < -Math.PI) diff += Math.PI * 2;
-        if (diff > Math.PI) diff -= Math.PI * 2;
-        player.bodyAngle += diff * 0.22;
-      }
-
-      // Si la tourelle n'est pas encore orientée à la souris, elle suit le châssis
-      if (typeof player.turretAngle !== 'number') {
-        player.turretAngle = player.bodyAngle;
-      }
+      // Arrêt net dès qu'on relâche pour viser exactement où on veut
+      player.turnVelocity = 0;
     }
+
+    player.bodyAngle += player.turnVelocity;
+    player.turretAngle = player.bodyAngle;
+
+    // Déplacement longitudinal des chenilles (Avancer / Reculer)
+    let targetSpeed = 0;
+    if (player.inputs.forward || player.inputs.up) {
+      targetSpeed = baseSpeed;
+    } else if (player.inputs.backward || player.inputs.down) {
+      targetSpeed = -baseSpeed * 0.65;
+    }
+
+    // Inertie mécanique des chenilles
+    player.currentSpeed = (player.currentSpeed || 0) * 0.72 + targetSpeed * 0.28;
+    if (Math.abs(player.currentSpeed) < 0.02) player.currentSpeed = targetSpeed === 0 ? 0 : player.currentSpeed;
+
+    const moveX = Math.cos(player.bodyAngle) * player.currentSpeed;
+    const moveY = Math.sin(player.bodyAngle) * player.currentSpeed;
 
     // Application du déplacement avec vérification des collisions de murs (glissement fluide)
     const nextX = player.x + moveX;

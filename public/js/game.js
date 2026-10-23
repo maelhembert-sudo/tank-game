@@ -11,29 +11,22 @@ let players = {};
 let bullets = [];
 let powerups = [];
 let particles = [];
+let trackMarks = [];
 let floatingTexts = [];
 let soundEnabled = true;
 let screenShake = 0;
 
-// Mode de pilotage : 'fluid' (recommandé : ZQSD directionnel + visée souris 360°) ou 'classic' (mode tank rétro)
-let currentControlMode = 'fluid';
-
-// Entrées utilisateur
+// Entrées utilisateur (Pilotage authentique de char d'assaut au clavier)
 const inputState = {
   forward: false,
   backward: false,
   left: false,
   right: false,
-  up: false,
-  down: false,
-  turretAngle: 0,
-  shoot: false,
-  controlMode: 'fluid'
+  shoot: false
 };
 
-// Caméra du joueur et position du curseur
+// Caméra du joueur
 const camera = { x: 0, y: 0 };
-let mouseScreenPos = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
 
 // Éléments du DOM
 const lobbyScreen = document.getElementById('lobby-screen');
@@ -52,9 +45,6 @@ const leaderboardList = document.getElementById('leaderboard-list');
 const killFeed = document.getElementById('kill-feed');
 const btnToggleSound = document.getElementById('btn-toggle-sound');
 const lanUrlText = document.getElementById('lan-url-text');
-const btnModeFluid = document.getElementById('btn-mode-fluid');
-const btnModeClassic = document.getElementById('btn-mode-classic');
-const modeHint = document.getElementById('mode-hint');
 
 let selectedColor = '#e52d27';
 
@@ -74,27 +64,6 @@ colorButtons.forEach(btn => {
     selectedColor = btn.dataset.color;
   });
 });
-
-// Sélecteur de mode de pilotage dans le lobby
-if (btnModeFluid && btnModeClassic) {
-  btnModeFluid.addEventListener('click', () => {
-    currentControlMode = 'fluid';
-    inputState.controlMode = 'fluid';
-    btnModeFluid.classList.add('active');
-    btnModeClassic.classList.remove('active');
-    if (modeHint) modeHint.textContent = '✨ Recommandé : pilotez avec ZQSD et visez à 360° avec la souris !';
-    sendInputs();
-  });
-
-  btnModeClassic.addEventListener('click', () => {
-    currentControlMode = 'classic';
-    inputState.controlMode = 'classic';
-    btnModeClassic.classList.add('active');
-    btnModeFluid.classList.remove('active');
-    if (modeHint) modeHint.textContent = '🚜 Style rétro : Z pour avancer, Q/D pour faire pivoter le châssis.';
-    sendInputs();
-  });
-}
 
 // Détection de l'adresse du serveur pour le message LAN
 if (window.location.hostname !== 'localhost' && window.location.hostname !== '127.0.0.1') {
@@ -155,7 +124,7 @@ function checkRectCircle(rect, cx, cy, radius) {
   return (dx * dx + dy * dy) < (radius * radius);
 }
 
-// Textes flottants (Dégâts, Soins, Kills)
+// Textes flottants (Dégâts, Soins)
 function addFloatingText(text, x, y, color = '#ffffff', fontSize = 16) {
   floatingTexts.push({
     text,
@@ -187,11 +156,10 @@ socket.on('game_state', (state) => {
         x: sp.x,
         y: sp.y,
         bodyAngle: sp.bodyAngle,
-        turretAngle: sp.turretAngle !== undefined ? sp.turretAngle : sp.bodyAngle,
+        turretAngle: sp.bodyAngle,
         targetX: sp.x,
         targetY: sp.y,
         targetAngle: sp.bodyAngle,
-        targetTurretAngle: sp.turretAngle !== undefined ? sp.turretAngle : sp.bodyAngle,
         prevHealth: sp.health
       };
     } else {
@@ -201,23 +169,28 @@ socket.on('game_state', (state) => {
       if (p.prevHealth !== undefined && p.isAlive && sp.isAlive) {
         const diff = sp.health - p.prevHealth;
         if (diff < -2) {
-          // Dégâts subis !
           addFloatingText(`${Math.round(diff)}`, sp.x, sp.y - 25, '#ef4444', 18);
           if (id === myId) {
-            addScreenShake(8);
+            addScreenShake(7);
           }
         } else if (diff > 5) {
-          // Soin reçu !
           addFloatingText(`+${Math.round(diff)} PV`, sp.x, sp.y - 25, '#34d399', 18);
         }
       }
       p.prevHealth = sp.health;
 
+      // Ajouter traces de chenilles lors des déplacements
+      const moveDist = Math.hypot(sp.x - p.x, sp.y - p.y);
+      const angleDiff = Math.abs(sp.bodyAngle - p.bodyAngle);
+      if ((moveDist > 2 || angleDiff > 0.02) && p.isAlive && Math.random() < 0.35) {
+        addTrackMarks(p);
+      }
+
       Object.assign(p, sp);
       p.targetX = sp.x;
       p.targetY = sp.y;
       p.targetAngle = sp.bodyAngle;
-      p.targetTurretAngle = sp.turretAngle !== undefined ? sp.turretAngle : sp.bodyAngle;
+      p.turretAngle = sp.bodyAngle;
 
       // Téléportation uniquement en cas de respawn (distance > 250px)
       const dist = Math.hypot(p.targetX - p.x, p.targetY - p.y);
@@ -225,7 +198,7 @@ socket.on('game_state', (state) => {
         p.x = p.targetX;
         p.y = p.targetY;
         p.bodyAngle = p.targetAngle;
-        p.turretAngle = p.targetTurretAngle;
+        p.turretAngle = p.targetAngle;
       }
     }
   }
@@ -250,6 +223,27 @@ socket.on('game_state', (state) => {
 
   updateHUD();
 });
+
+// Traces de chenilles au sol (rendu authentique de char)
+function addTrackMarks(tank) {
+  const cos = Math.cos(tank.bodyAngle);
+  const sin = Math.sin(tank.bodyAngle);
+  const perpX = -sin * 13;
+  const perpY = cos * 13;
+
+  trackMarks.push({
+    x1: tank.x + perpX,
+    y1: tank.y + perpY,
+    x2: tank.x - perpX,
+    y2: tank.y - perpY,
+    angle: tank.bodyAngle,
+    life: 1.0
+  });
+
+  if (trackMarks.length > 180) {
+    trackMarks.shift();
+  }
+}
 
 // Événements de son reçus du serveur
 socket.on('sound_event', (evt) => {
@@ -411,7 +405,7 @@ function playSound(type) {
     osc.stop(now + 0.27);
   } else if (type === 'heal') {
     // Accord mélodique ascendant lumineux pour le kit de soin
-    const notes = [523.25, 659.25, 783.99, 1046.50]; // Do, Mi, Sol, Do
+    const notes = [523.25, 659.25, 783.99, 1046.50];
     notes.forEach((freq, idx) => {
       const osc = audioCtx.createOscillator();
       const gain = audioCtx.createGain();
@@ -426,7 +420,6 @@ function playSound(type) {
       osc.stop(start + 0.24);
     });
   } else if (type === 'health_spawn') {
-    // Ping sonore d'annonce de largage de kit de soin
     const osc = audioCtx.createOscillator();
     const gain = audioCtx.createGain();
     osc.type = 'sine';
@@ -480,122 +473,69 @@ function createExplosionParticles(x, y, radius, type) {
   }
 }
 
-// Orientation dynamique de la tourelle vers le curseur de souris
-function updateTurretAim() {
-  const me = players[myId];
-  if (!me) return;
-  const worldMouseX = mouseScreenPos.x + camera.x;
-  const worldMouseY = mouseScreenPos.y + camera.y;
-  const aimAngle = Math.atan2(worldMouseY - me.y, worldMouseX - me.x);
-  inputState.turretAngle = aimAngle;
-  if (me.isAlive) {
-    me.turretAngle = aimAngle;
-  }
-}
-
-// Suivi du déplacement de la souris sur tout l'écran
-window.addEventListener('mousemove', (e) => {
-  mouseScreenPos.x = e.clientX;
-  mouseScreenPos.y = e.clientY;
-  updateTurretAim();
-});
-
-// Entrées Clavier
+// Entrées Clavier (Flèches ou ZQSD pour piloter, Espace pour tirer)
 window.addEventListener('keydown', (e) => {
   if (e.repeat) return;
   const key = e.key.toLowerCase();
   let changed = false;
 
-  if (currentControlMode === 'fluid') {
-    // Mode Fluide Moderne : Z=Haut, S=Bas, Q=Gauche, D=Droite
-    if ((key === 'z' || key === 'w' || key === 'arrowup') && !inputState.up) {
-      inputState.up = true;
-      inputState.forward = true;
-      changed = true;
-    }
-    if ((key === 's' || key === 'arrowdown') && !inputState.down) {
-      inputState.down = true;
-      inputState.backward = true;
-      changed = true;
-    }
-    if ((key === 'q' || key === 'a' || key === 'arrowleft') && !inputState.left) {
-      inputState.left = true;
-      changed = true;
-    }
-    if ((key === 'd' || key === 'arrowright') && !inputState.right) {
-      inputState.right = true;
-      changed = true;
-    }
-  } else {
-    // Mode Classique Tank
-    if ((key === 'z' || key === 'w' || key === 'arrowup') && !inputState.forward) {
-      inputState.forward = true;
-      changed = true;
-    }
-    if ((key === 's' || key === 'arrowdown') && !inputState.backward) {
-      inputState.backward = true;
-      changed = true;
-    }
-    if ((key === 'q' || key === 'a' || key === 'arrowleft') && !inputState.left) {
-      inputState.left = true;
-      changed = true;
-    }
-    if ((key === 'd' || key === 'arrowright') && !inputState.right) {
-      inputState.right = true;
-      changed = true;
-    }
+  if (key === 'arrowup' || key === 'z' || key === 'w') {
+    inputState.forward = true;
+    changed = true;
   }
-
-  if (key === ' ' && !inputState.shoot) {
+  if (key === 'arrowdown' || key === 's') {
+    inputState.backward = true;
+    changed = true;
+  }
+  if (key === 'arrowleft' || key === 'q' || key === 'a') {
+    inputState.left = true;
+    changed = true;
+  }
+  if (key === 'arrowright' || key === 'd') {
+    inputState.right = true;
+    changed = true;
+  }
+  if (key === ' ' || e.code === 'Space') {
     inputState.shoot = true;
     changed = true;
     e.preventDefault();
   }
 
-  if (changed) {
-    updateTurretAim();
-    sendInputs();
-  }
+  if (changed) sendInputs();
 });
 
 window.addEventListener('keyup', (e) => {
   const key = e.key.toLowerCase();
   let changed = false;
 
-  if (key === 'z' || key === 'w' || key === 'arrowup') {
-    inputState.up = false;
+  if (key === 'arrowup' || key === 'z' || key === 'w') {
     inputState.forward = false;
     changed = true;
   }
-  if (key === 's' || key === 'arrowdown') {
-    inputState.down = false;
+  if (key === 'arrowdown' || key === 's') {
     inputState.backward = false;
     changed = true;
   }
-  if (key === 'q' || key === 'a' || key === 'arrowleft') {
+  if (key === 'arrowleft' || key === 'q' || key === 'a') {
     inputState.left = false;
     changed = true;
   }
-  if (key === 'd' || key === 'arrowright') {
+  if (key === 'arrowright' || key === 'd') {
     inputState.right = false;
     changed = true;
   }
-  if (key === ' ' && inputState.shoot) {
+  if (key === ' ' || e.code === 'Space') {
     inputState.shoot = false;
     changed = true;
   }
 
-  if (changed) {
-    updateTurretAim();
-    sendInputs();
-  }
+  if (changed) sendInputs();
 });
 
-// Clic souris pour tirer dans la direction de visée
+// Clic souris comme option alternative pour tirer droit devant
 window.addEventListener('mousedown', (e) => {
   if (e.target.closest('#lobby-screen') || e.target.closest('.btn-sound') || e.target.closest('.btn-hub')) return;
   inputState.shoot = true;
-  updateTurretAim();
   sendInputs();
 });
 
@@ -606,35 +546,28 @@ window.addEventListener('mouseup', () => {
 
 function sendInputs() {
   if (!myId || !players[myId]) return;
-  inputState.controlMode = currentControlMode;
   socket.emit('player_input', inputState);
 }
 
-// Heartbeat régulier pour garantir l'intégrité de l'état sans saturer le réseau (25 Hz)
+// Heartbeat régulier (25 Hz)
 setInterval(() => {
   if (myId && players[myId]) {
-    updateTurretAim();
-    inputState.controlMode = currentControlMode;
     socket.emit('player_input', inputState);
   }
 }, 40);
 
-// Contrôles tactiles (Double joystick virtuel Mobile & Tablette)
+// Contrôles tactiles (Mobile & Tablette)
 setupTouchControls();
 
 function setupTouchControls() {
   const moveZone = document.getElementById('touch-move-zone');
   const moveStick = document.getElementById('touch-move-stick');
-  const aimZone = document.getElementById('touch-aim-zone');
-  const aimStick = document.getElementById('touch-aim-stick');
   const fireBtn = document.getElementById('touch-fire-btn');
 
   let moveTouchId = null;
   let moveCenter = { x: 0, y: 0 };
-  let aimTouchId = null;
-  let aimCenter = { x: 0, y: 0 };
 
-  // Joystick gauche : Déplacement
+  // Joystick de pilotage (déplacement + orientation)
   moveZone.addEventListener('touchstart', (e) => {
     e.preventDefault();
     const touch = e.changedTouches[0];
@@ -658,8 +591,6 @@ function setupTouchControls() {
     moveStick.style.transform = `translate(0px, 0px)`;
     inputState.forward = false;
     inputState.backward = false;
-    inputState.up = false;
-    inputState.down = false;
     inputState.left = false;
     inputState.right = false;
     sendInputs();
@@ -681,15 +612,11 @@ function setupTouchControls() {
     moveStick.style.transform = `translate(${stickX}px, ${stickY}px)`;
 
     if (dist > 10) {
-      inputState.up = dy < -12;
-      inputState.down = dy > 12;
-      inputState.forward = inputState.up;
-      inputState.backward = inputState.down;
+      inputState.forward = dy < -12;
+      inputState.backward = dy > 12;
       inputState.left = dx < -12;
       inputState.right = dx > 12;
     } else {
-      inputState.up = false;
-      inputState.down = false;
       inputState.forward = false;
       inputState.backward = false;
       inputState.left = false;
@@ -698,57 +625,7 @@ function setupTouchControls() {
     sendInputs();
   }
 
-  // Joystick droit : Visée à 360°
-  if (aimZone && aimStick) {
-    aimZone.addEventListener('touchstart', (e) => {
-      if (e.target.closest('#touch-fire-btn')) return;
-      e.preventDefault();
-      const touch = e.changedTouches[0];
-      aimTouchId = touch.identifier;
-      const rect = aimZone.getBoundingClientRect();
-      aimCenter = { x: rect.left + rect.width / 2, y: rect.top + rect.height / 2 };
-      handleAimTouch(touch);
-    }, { passive: false });
-
-    aimZone.addEventListener('touchmove', (e) => {
-      e.preventDefault();
-      for (let i = 0; i < e.changedTouches.length; i++) {
-        if (e.changedTouches[i].identifier === aimTouchId) {
-          handleAimTouch(e.changedTouches[i]);
-        }
-      }
-    }, { passive: false });
-
-    function endAimTouch() {
-      aimTouchId = null;
-      aimStick.style.transform = `translate(0px, 0px)`;
-    }
-
-    aimZone.addEventListener('touchend', endAimTouch);
-    aimZone.addEventListener('touchcancel', endAimTouch);
-
-    function handleAimTouch(touch) {
-      const dx = touch.clientX - aimCenter.x;
-      const dy = touch.clientY - aimCenter.y;
-      const dist = Math.hypot(dx, dy);
-      const maxRadius = 45;
-      const clampedDist = Math.min(dist, maxRadius);
-      const angle = Math.atan2(dy, dx);
-
-      const stickX = Math.cos(angle) * clampedDist;
-      const stickY = Math.sin(angle) * clampedDist;
-      aimStick.style.transform = `translate(${stickX}px, ${stickY}px)`;
-
-      if (dist > 12) {
-        inputState.turretAngle = angle;
-        const me = players[myId];
-        if (me) me.turretAngle = angle;
-        sendInputs();
-      }
-    }
-  }
-
-  // Bouton de tir tactile
+  // Bouton de tir
   fireBtn.addEventListener('touchstart', (e) => {
     e.preventDefault();
     inputState.shoot = true;
@@ -780,17 +657,8 @@ function gameLoop(currentTime) {
       p.x = lerp(p.x, p.targetX, factor);
       p.y = lerp(p.y, p.targetY, factor);
       p.bodyAngle = lerpAngle(p.bodyAngle, p.targetAngle, factor);
-
-      // Pour les autres joueurs, interpolation de la tourelle
-      if (id !== myId && p.targetTurretAngle !== undefined) {
-        p.turretAngle = lerpAngle(p.turretAngle !== undefined ? p.turretAngle : p.bodyAngle, p.targetTurretAngle, factor);
-      }
+      p.turretAngle = p.bodyAngle;
     }
-  }
-
-  // Pour le joueur local, orientation instantanée de la tourelle vers la souris (zéro latence)
-  if (!isTouchDevice) {
-    updateTurretAim();
   }
 
   // 2. Extrapolation continue des projectiles entre les ticks réseau
@@ -830,31 +698,34 @@ function render(dt) {
   // 1. Dessiner le sol et le quadrillage
   drawGrid();
 
-  // 2. Dessiner les murs
+  // 2. Dessiner les traces de chenilles au sol
+  drawTrackMarks(dt);
+
+  // 3. Dessiner les murs
   drawWalls();
 
-  // 3. Dessiner les Power-ups (dont le Kit de Soin rare)
+  // 4. Dessiner les Power-ups (dont le Kit de Soin rare)
   drawPowerups();
 
-  // 4. Dessiner les Tanks
+  // 5. Dessiner les Tanks
   for (const id in players) {
     drawTank(players[id]);
   }
 
-  // 5. Dessiner les Projectiles
+  // 6. Faisceau laser de visée droit devant pour le tank local
+  const me = players[myId];
+  if (me && me.isAlive) {
+    drawTankLaserGuide(me);
+  }
+
+  // 7. Dessiner les Projectiles
   drawBullets();
 
-  // 6. Dessiner les Particules
+  // 8. Dessiner les Particules
   drawParticles();
 
-  // 7. Dessiner les Textes Flottants (Dégâts, Soins)
+  // 9. Dessiner les Textes Flottants (Dégâts, Soins)
   drawFloatingTexts(dt);
-
-  // 8. Viseur laser & réticule de visée 360° pour le joueur local sur PC
-  const me = players[myId];
-  if (me && me.isAlive && !isTouchDevice) {
-    drawAimReticle(me);
-  }
 
   ctx.restore();
 }
@@ -882,6 +753,27 @@ function drawGrid() {
   }
 }
 
+// Dessiner les traces de chenilles au sol
+function drawTrackMarks(dt) {
+  for (let i = trackMarks.length - 1; i >= 0; i--) {
+    const tm = trackMarks[i];
+    tm.life -= 0.004 * dt;
+    if (tm.life <= 0) {
+      trackMarks.splice(i, 1);
+      continue;
+    }
+
+    ctx.save();
+    ctx.globalAlpha = tm.life * 0.35;
+    ctx.fillStyle = '#06090e';
+    ctx.beginPath();
+    ctx.arc(tm.x1, tm.y1, 2.5, 0, Math.PI * 2);
+    ctx.arc(tm.x2, tm.y2, 2.5, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
 // Dessiner les murs de l'arène
 function drawWalls() {
   if (!mapConfig.walls) return;
@@ -898,7 +790,7 @@ function drawWalls() {
   });
 }
 
-// Dessin d'un Tank
+// Dessin d'un Tank (Vrai char avec tourelle fixe alignée sur le châssis)
 function drawTank(tank) {
   if (!tank.isAlive) return;
 
@@ -930,7 +822,7 @@ function drawTank(tank) {
   ctx.ellipse(3, 4, tank.width / 2 + 4, tank.height / 2 + 4, tank.bodyAngle, 0, Math.PI * 2);
   ctx.fill();
 
-  // 2. Châssis (corps du tank avec chenilles orienté selon bodyAngle)
+  // 2. Châssis (corps du tank avec chenilles)
   ctx.save();
   ctx.rotate(tank.bodyAngle);
 
@@ -955,23 +847,16 @@ function drawTank(tank) {
   ctx.lineWidth = 2;
   ctx.stroke();
 
-  ctx.restore();
-
-  // 3. Tourelle et Canon (orientée indépendamment selon turretAngle pour viser à 360°)
-  ctx.save();
-  const turretAngle = tank.turretAngle !== undefined ? tank.turretAngle : tank.bodyAngle;
-  ctx.rotate(turretAngle);
-
-  // Canon principal
+  // 3. Tourelle et Canon (solidaire du châssis, comme sur un vrai char de combat)
   ctx.fillStyle = '#2d333b';
-  ctx.fillRect(0, -4, 30, 8);
+  ctx.fillRect(0, -4, 28, 8);
   ctx.strokeStyle = '#0d1117';
   ctx.lineWidth = 1.5;
-  ctx.strokeRect(0, -4, 30, 8);
+  ctx.strokeRect(0, -4, 28, 8);
 
   // Muzzle (frein de bouche)
   ctx.fillStyle = '#161b22';
-  ctx.fillRect(26, -5.5, 5, 11);
+  ctx.fillRect(24, -5.5, 5, 11);
 
   // Base circulaire de la tourelle
   ctx.fillStyle = '#1c1f24';
@@ -988,7 +873,7 @@ function drawTank(tank) {
   ctx.arc(0, 0, 4, 0, Math.PI * 2);
   ctx.fill();
 
-  ctx.restore();
+  ctx.restore(); // fin rotation châssis
 
   // 4. Bouclier protecteur physique (visible jusqu'à sa destruction)
   const now = Date.now();
@@ -1020,7 +905,7 @@ function drawTank(tank) {
 
   ctx.restore(); // retour au repère monde
 
-  // 5. Barre de vie et pseudo au-dessus du tank
+  // 5. Pseudo et Barre de vie au-dessus du tank
   ctx.fillStyle = '#ffffff';
   ctx.font = 'bold 12px sans-serif';
   ctx.textAlign = 'center';
@@ -1042,7 +927,7 @@ function drawTank(tank) {
   ctx.fillStyle = hpPct > 0.5 ? '#38ef7d' : (hpPct > 0.25 ? '#ffb300' : '#ef4444');
   ctx.fillRect(barX, barY, barW * hpPct, barH);
 
-  // Lignes de segmentation (pour compter ses PV restants en un coup d'œil !)
+  // Lignes de segmentation
   ctx.strokeStyle = 'rgba(0, 0, 0, 0.55)';
   ctx.lineWidth = 1;
   const segments = 6;
@@ -1055,55 +940,31 @@ function drawTank(tank) {
   }
 }
 
-// Dessin du réticule de visée et du laser guide pour le joueur local
-function drawAimReticle(me) {
-  const worldMouseX = mouseScreenPos.x + camera.x;
-  const worldMouseY = mouseScreenPos.y + camera.y;
+// Faisceau laser guide droit devant le canon du char local (aide à ajuster les tirs et rebonds)
+function drawTankLaserGuide(me) {
+  const barrelLength = 30;
+  const muzzleX = me.x + Math.cos(me.bodyAngle) * barrelLength;
+  const muzzleY = me.y + Math.sin(me.bodyAngle) * barrelLength;
 
-  const barrelLength = 32;
-  const turretAngle = me.turretAngle !== undefined ? me.turretAngle : me.bodyAngle;
-  const muzzleX = me.x + Math.cos(turretAngle) * barrelLength;
-  const muzzleY = me.y + Math.sin(turretAngle) * barrelLength;
+  const laserDistance = 240;
+  const endX = muzzleX + Math.cos(me.bodyAngle) * laserDistance;
+  const endY = muzzleY + Math.sin(me.bodyAngle) * laserDistance;
 
   ctx.save();
-
-  // Faisceau laser discret entre le bout du canon et le réticule
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.22)';
+  ctx.strokeStyle = 'rgba(255, 255, 255, 0.3)';
   ctx.lineWidth = 1.2;
   ctx.setLineDash([4, 6]);
   ctx.beginPath();
   ctx.moveTo(muzzleX, muzzleY);
-  ctx.lineTo(worldMouseX, worldMouseY);
+  ctx.lineTo(endX, endY);
   ctx.stroke();
-  ctx.setLineDash([]);
 
-  // Réticule circulaire tactique
-  const r = 13;
-  ctx.strokeStyle = me.color || '#38ef7d';
-  ctx.lineWidth = 2;
-  ctx.shadowColor = me.color || '#38ef7d';
+  // Petit point lumineux d'aide à la visée à l'extrémité
+  ctx.fillStyle = me.color || '#ff416c';
+  ctx.shadowColor = me.color || '#ff416c';
   ctx.shadowBlur = 8;
-
   ctx.beginPath();
-  ctx.arc(worldMouseX, worldMouseY, r, 0, Math.PI * 2);
-  ctx.stroke();
-
-  // 4 encoches de visée
-  ctx.beginPath();
-  ctx.moveTo(worldMouseX - r - 4, worldMouseY);
-  ctx.lineTo(worldMouseX - r + 3, worldMouseY);
-  ctx.moveTo(worldMouseX + r - 3, worldMouseY);
-  ctx.lineTo(worldMouseX + r + 4, worldMouseY);
-  ctx.moveTo(worldMouseX, worldMouseY - r - 4);
-  ctx.lineTo(worldMouseX, worldMouseY - r + 3);
-  ctx.moveTo(worldMouseX, worldMouseY + r - 3);
-  ctx.lineTo(worldMouseX, worldMouseY + r + 4);
-  ctx.stroke();
-
-  // Point central
-  ctx.fillStyle = '#ffffff';
-  ctx.beginPath();
-  ctx.arc(worldMouseX, worldMouseY, 2, 0, Math.PI * 2);
+  ctx.arc(endX, endY, 2.5, 0, Math.PI * 2);
   ctx.fill();
 
   ctx.restore();

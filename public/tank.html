@@ -35,30 +35,19 @@
         </div>
       </div>
 
-      <div class="form-group">
-        <label>Mode de pilotage :</label>
-        <div class="mode-selector">
-          <button type="button" class="mode-toggle-btn active" data-mode="fluid" id="btn-mode-fluid">🕹️ Fluide (ZQSD + Souris)</button>
-          <button type="button" class="mode-toggle-btn" data-mode="classic" id="btn-mode-classic">🚜 Tank Classique</button>
-        </div>
-        <div class="mode-hint" id="mode-hint">✨ Recommandé : pilotez avec ZQSD et visez à 360° avec la souris !</div>
-      </div>
-
       <button id="btn-start" class="btn-play">ENTRER DANS L'ARÈNE 🚀</button>
       <a href="/" class="btn-back-link">← Retour au Hub des Jeux</a>
 
       <div class="instructions-panel">
         <div class="instruction-col">
-          <strong>💻 Sur PC :</strong>
-          <span><b>Z, Q, S, D</b> ou <b>Flèches</b> : Déplacement libre</span>
-          <span><b>Souris</b> : Viser à 360° avec viseur laser</span>
-          <span><b>Clic Gauche</b> ou <b>Espace</b> : Tirer</span>
+          <strong>💻 Sur PC (Au Clavier) :</strong>
+          <span><b>Flèches</b> ou <b>Z, Q, S, D</b> : Avancer, reculer & pivoter</span>
+          <span><b>Barre Espace</b> (ou Clic) : Tirer l'obus droit devant</span>
         </div>
         <div class="instruction-col">
           <strong>📱 Sur Mobile / Tablette :</strong>
-          <span><b>Joystick Gauche</b> : Se déplacer</span>
-          <span><b>Joystick Droit</b> : Viser à 360°</span>
-          <span><b>Bouton FEU</b> : Tirer</span>
+          <span><b>Joystick</b> : Piloter le char</span>
+          <span><b>Bouton FEU</b> : Tirer l'obus</span>
         </div>
       </div>
 
@@ -114,10 +103,7 @@
         <div id="touch-move-stick" class="joystick-stick"></div>
       </div>
     </div>
-    <div id="touch-aim-zone" class="touch-zone right-zone">
-      <div id="touch-aim-base" class="joystick-base">
-        <div id="touch-aim-stick" class="joystick-stick"></div>
-      </div>
+    <div class="touch-zone right-zone">
       <button id="touch-fire-btn" class="touch-fire-button">FEU 🔥</button>
     </div>
   </div>
